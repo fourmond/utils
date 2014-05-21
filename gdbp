@@ -1,0 +1,142 @@
+#! /usr/bin/ruby
+
+# A sampling profiler using gdb to get stack traces
+
+# Copyright 2014 by Vincent Fourmond
+# This program is free software. It is distributed under the terms of the
+# GNU General Public License version 3.0 or later, found at
+# https://www.gnu.org/copyleft/gpl.html
+#
+# There is NO WARRANTY.
+
+require 'open3'
+
+class GDB
+
+  class Thread
+    attr_accessor :id
+    attr_accessor :hex
+
+    def initialize(i, hx)
+      @id = i
+      @hex = hx
+      @cur_frame = 0
+
+      @frames = []
+    end
+
+    def push_frame(frame, address, func, place)
+      
+      if frame <= @cur_frame
+        @frames << []
+      end
+      @frames.last << [address, func.split(/\s*\(/).first, place]
+      @cur_frame = frame
+    end
+
+    # Prints stats about the stack trace
+    def stats
+      # very basic !
+      vals = {}
+      for f in @frames
+        for cur in f
+          vals[cur[1]] ||= 0
+          vals[cur[1]] += 1
+        end
+      end
+
+      keys = vals.keys
+      keys.sort! do |a,b|
+        vals[a] <=> vals[b]
+      end
+      for k in keys
+        puts "%4d\t%s" % [vals[k], k]
+      end
+    end
+  end
+
+  attr_accessor :threads
+  
+  def initialize(pg, pid)
+    @stdin, @stdout, @wait = Open3::popen2e("gdb",  pg, pid)
+
+    @threads = {}
+    @buf = ""
+
+    @ct = nil
+    
+  end
+
+  # Reads the next line, returning _nil_ when no line is ready
+  def readline
+    begin
+      ln = @stdout.read_nonblock(100)
+    rescue IO::WaitReadable
+    end
+    if ln
+      @buf << ln
+    end
+    lns = @buf.split("\n", 2)
+    if lns.size > 1
+      @buf = lns[1]
+      return lns[0]
+    end
+    return nil
+  end
+
+  def flush
+    while str = readline
+      # p str
+      # Now, we parse:
+      if str =~ /Thread\s*(\d+)\s*\(Thread\s*(0x[0-9A-F]+)/i
+        tid = $1.to_i
+        hx = $2
+        @threads[hx] ||= Thread.new(tid, hx)
+        @ct = @threads[hx]
+      elsif str =~/#(\d+)\s+(0x[0-9A-F]+)\s*in\s*(.*)\s+(?:from|at)\s*(\S+)/i
+        if ! @ct
+          puts "Err: stack frame but no current thread"
+        else
+          @ct.push_frame($1.to_i, $2, $3, $4)
+        end
+      end
+    end
+  end
+
+  def next_prompt
+    while true
+      str = readline
+      p str if str
+    end
+  end
+
+  def send(str)
+    @stdin.puts(str)
+  end
+
+  def close
+    send("quit")
+    @stdin.close
+    flush
+  end
+
+end
+
+begin
+  gdb = GDB.new(ARGV[0], ARGV[1])
+  gdb.send("set pagination off")
+  gdb.send("set width 0")
+  while true
+    gdb.send("thread apply all bt")
+    gdb.send("continue")
+    gdb.flush()
+    sleep(0.4)
+    Process.kill("TRAP", ARGV[1].to_i) 
+  end
+rescue Interrupt
+  for t in gdb.threads.values
+    puts "Thread: #{t.id}: #{t.hex}"
+    t.stats
+  end
+end
+gdb.close
