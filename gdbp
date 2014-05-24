@@ -11,50 +11,87 @@
 
 require 'open3'
 
-class GDB
+class Frame
+  attr_accessor :frame, :address, :func, :args, :place
 
-  class Thread
-    attr_accessor :id
-    attr_accessor :hex
-
-    def initialize(i, hx)
-      @id = i
-      @hex = hx
-      @cur_frame = 0
-
-      @frames = []
-    end
-
-    def push_frame(frame, address, func, place)
-      
-      if frame <= @cur_frame
-        @frames << []
-      end
-      @frames.last << [address, func.split(/\s*\(/).first, place]
-      @cur_frame = frame
-    end
-
-    # Prints stats about the stack trace
-    def stats
-      # very basic !
-      vals = {}
-      for f in @frames
-        for cur in f
-          vals[cur[1]] ||= 0
-          vals[cur[1]] += 1
-        end
-      end
-
-      keys = vals.keys
-      keys.sort! do |a,b|
-        vals[a] <=> vals[b]
-      end
-      for k in keys
-        puts "%4d\t%s" % [vals[k], k]
-      end
-    end
+  def initialize(frame, address, func, place)
+    @frame = frame
+    @address = address
+    @func = func.split(/\s*\(/).first
+    @args = func[@func.size..-1]
+    @place = place
   end
 
+  # Sorts an array of Frame by function. Returns a hash func -> [frames]
+  def self.sort_by_func(frames)
+    ret = {}
+    for f in frames.flatten
+      ret[f.func] ||= []
+      ret[f.func] << f
+    end
+    return ret
+  end
+
+  # Returns the most common element from the array
+  def self.most_common(which, frames)
+    vals = {}
+    for f in frames
+      key = f.send(which)
+      vals[key] ||= []
+      vals[key] << f
+    end
+
+    keys = vals.keys
+    keys.sort! do |a,b|
+      vals[a].size <=> vals[b].size
+    end
+
+    return [keys.last, vals[keys.last].size]
+  end
+end
+
+class GDBThread
+  attr_accessor :id
+  attr_accessor :hex
+  
+  def initialize(i, hx)
+    @id = i
+    @hex = hx
+    @cur_frame = 0
+    
+    @frames = []
+  end
+  
+  def push_frame(frame, address, func, place)
+    
+    if frame <= @cur_frame
+      @frames << []
+    end
+    @frames.last << Frame.new(frame, address, func, place)
+    @cur_frame = frame
+  end
+  
+  # Prints stats about the stack trace
+  def stats
+    # very basic !
+    srted = Frame.sort_by_func(@frames)
+
+    keys = srted.keys
+    keys.sort! do |a,b|
+      srted[a].size <=> srted[b].size
+    end
+    for k in keys
+      frs = srted[k]
+      mcf = Frame.most_common(:frame, frs)
+      plc = Frame.most_common(:place, frs)
+      puts "%4d\t%s\t%s\t%s" % [srted[k].size, k, 
+                                "##{mcf[0]}(#{mcf[1]})",
+                                "##{plc[0]}(#{plc[1]})"]
+    end
+  end
+end
+
+class GDB
   attr_accessor :threads
   
   def initialize(pg, pid)
@@ -86,12 +123,11 @@ class GDB
 
   def flush
     while str = readline
-      # p str
       # Now, we parse:
       if str =~ /Thread\s*(\d+)\s*\(Thread\s*(0x[0-9A-F]+)/i
         tid = $1.to_i
         hx = $2
-        @threads[hx] ||= Thread.new(tid, hx)
+        @threads[hx] ||= GDBThread.new(tid, hx)
         @ct = @threads[hx]
       elsif str =~/#(\d+)\s+(0x[0-9A-F]+)\s*in\s*(.*)\s+(?:from|at)\s*(\S+)/i
         if ! @ct
@@ -99,7 +135,19 @@ class GDB
         else
           @ct.push_frame($1.to_i, $2, $3, $4)
         end
+      elsif str =~ /SYNCING/
+        @synced = true
+        return
       end
+    end
+  end
+
+  # Ensures all the commands by gdb have been processed
+  def sync
+    @synced = false
+    send("echo SYNCING\\n")
+    while ! @synced
+      flush
     end
   end
 
@@ -122,21 +170,25 @@ class GDB
 
 end
 
+number = 0
 begin
   gdb = GDB.new(ARGV[0], ARGV[1])
   gdb.send("set pagination off")
   gdb.send("set width 0")
   while true
     gdb.send("thread apply all bt")
+    gdb.sync()
     gdb.send("continue")
-    gdb.flush()
-    sleep(0.4)
+    number += 1
+    sleep(0.1)
     Process.kill("TRAP", ARGV[1].to_i) 
   end
 rescue Interrupt
-  for t in gdb.threads.values
-    puts "Thread: #{t.id}: #{t.hex}"
-    t.stats
-  end
+end
+
+puts "Took #{number} samples"
+for t in gdb.threads.values
+  puts "Thread: #{t.id}: #{t.hex}"
+  t.stats
 end
 gdb.close
