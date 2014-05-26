@@ -10,6 +10,7 @@
 # There is NO WARRANTY.
 
 require 'open3'
+require 'optparse'
 
 class Frame
   attr_accessor :frame, :address, :func, :args, :place
@@ -170,17 +171,36 @@ class GDB
 
 end
 
+sleep = 0.1
+limit = 0
+
+opts = OptionParser.new do |opts|
+  opts.on("-s", "--sleep X",
+          "Sleep time between signals") do |x|
+    sleep = x.to_f
+  end
+  opts.on("-l", "--limit X",
+          "Stop automatically after this many interruptions") do |x|
+    limit = x.to_i
+  end
+end
+
+opts.parse!(ARGV)
+
 number = 0
 begin
   gdb = GDB.new(ARGV[0], ARGV[1])
   gdb.send("set pagination off")
   gdb.send("set width 0")
   while true
+    if limit > 0 && number >= limit
+      break
+    end
+    number += 1
     gdb.send("thread apply all bt")
     gdb.sync()
     gdb.send("continue")
-    number += 1
-    sleep(0.1)
+    sleep(sleep)
     Process.kill("TRAP", ARGV[1].to_i) 
   end
 rescue Interrupt
