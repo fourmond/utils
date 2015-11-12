@@ -15,6 +15,8 @@ parser = argparse.ArgumentParser(description='...')
 parser.add_argument('--list-classes', action='store_true')
 parser.add_argument('--list-members', action='store_true')
 parser.add_argument('--list-statics', action='store_true')
+parser.add_argument('--find-member-body', action='append')
+parser.add_argument('--find-member-decl', action='append')
 
 args = parser.parse_args()
 
@@ -28,7 +30,14 @@ class compound:
     def __init__(self,el):
         self.name = el.find("name", recursive=False).string
         self.kind = el['kind']
+        self.ref = el['refid']
         self.members = {}
+        self.data = None
+
+    def get_data(self):
+        if self.data is None:
+            self.data = bs4.BeautifulSoup(open("xml/%s.xml" % self.ref), "lxml")
+        return self.data
 
 
 class member:
@@ -38,11 +47,26 @@ class member:
         self.parent = parent
         self.ref = sel['refid']
         self.kind = sel['kind']
+        self.data = None
 
     def full_name(self):
         if self.parent.kind == "namespace" or self.parent.kind == "class":
             return "%s::%s" % (self.parent.name, self.name)
         return self.name
+
+    def get_data(self):
+        if self.data is None:
+            cmpd = self.parent.get_data()
+            self.data = cmpd.find(id=self.ref)
+        return self.data
+
+    def location(self):
+        loc = self.get_data().find("location")
+        return "%s:%s" % (loc["file"], loc["line"])
+
+    def body(self):
+        loc = self.get_data().find("location")
+        return "%s:%s" % (loc["bodyfile"], loc["bodystart"])
         
 
 for el in index.find_all("compound"):
@@ -55,6 +79,9 @@ for el in index.find_all("compound"):
     for sel in el.find_all("member"):
         obj = member(cmpd, sel)
         cmpd.members[obj.name] = obj
+        name_idx[obj.full_name()] = obj
+
+
 
 def print_classes():
     print "\n".join(sorted(idx["class"].keys()))
@@ -78,3 +105,13 @@ if(args.list_members):
 
 if(args.list_statics):
     print_members("file", True)
+
+if args.find_member_body:
+    for f in args.find_member_body:
+        m = name_idx[f]
+        print m.body()
+
+if args.find_member_decl:
+    for f in args.find_member_decl:
+        m = name_idx[f]
+        print m.location()
