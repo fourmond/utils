@@ -1,0 +1,80 @@
+#! /usr/bin/python
+
+import bs4
+import glob
+
+
+import argparse
+
+
+
+# We need the index regardless of what happens
+index = bs4.BeautifulSoup(open("xml/index.xml"), "lxml")
+
+parser = argparse.ArgumentParser(description='...')
+parser.add_argument('--list-classes', action='store_true')
+parser.add_argument('--list-members', action='store_true')
+parser.add_argument('--list-statics', action='store_true')
+
+args = parser.parse_args()
+
+# A dictionnary:
+idx = {}
+
+name_idx = {}
+
+
+class compound:
+    def __init__(self,el):
+        self.name = el.find("name", recursive=False).string
+        self.kind = el['kind']
+        self.members = {}
+
+
+class member:
+    def __init__(self, parent, sel):
+        nm2 = sel.find("name", recursive=False).string
+        self.name = nm2
+        self.parent = parent
+        self.ref = sel['refid']
+        self.kind = sel['kind']
+
+    def full_name(self):
+        if self.parent.kind == "namespace" or self.parent.kind == "class":
+            return "%s::%s" % (self.parent.name, self.name)
+        return self.name
+        
+
+for el in index.find_all("compound"):
+    if not el['kind'] in idx:
+        idx[el['kind']] = {}
+
+    cmpd = compound(el)
+    idx[cmpd.kind][cmpd.name] = cmpd
+    
+    for sel in el.find_all("member"):
+        obj = member(cmpd, sel)
+        cmpd.members[obj.name] = obj
+
+def print_classes():
+    print "\n".join(sorted(idx["class"].keys()))
+
+def print_members(what = "class", print_compound = False):
+    for cls in sorted(idx[what].keys()):
+        cls = idx[what][cls]
+        if len(cls.members) == 0:
+            continue
+        if print_compound:
+            print "%s:" % cls.name
+        for m in sorted(cls.members.keys()):
+            m = cls.members[m]
+            print "%s (%s)" % (m.full_name(), m.kind)
+
+if(args.list_classes):
+    print_classes()
+
+if(args.list_members):
+    print_members()
+
+if(args.list_statics):
+    print_members("file", True)
