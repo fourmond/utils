@@ -2,6 +2,7 @@
 
 import bs4
 import glob
+import subprocess
 
 
 import argparse
@@ -17,6 +18,10 @@ parser.add_argument('--list-members', action='store_true')
 parser.add_argument('--list-statics', action='store_true')
 parser.add_argument('--find-member-body', action='append')
 parser.add_argument('--find-member-decl', action='append')
+
+# 
+parser.add_argument('--find-static', action='append')
+parser.add_argument('--emacs', action='store_true')
 
 args = parser.parse_args()
 
@@ -38,7 +43,6 @@ class compound:
         if self.data is None:
             self.data = bs4.BeautifulSoup(open("xml/%s.xml" % self.ref), "lxml")
         return self.data
-
 
 class member:
     def __init__(self, parent, sel):
@@ -62,12 +66,26 @@ class member:
 
     def location(self):
         loc = self.get_data().find("location")
-        return "%s:%s" % (loc["file"], loc["line"])
+        return location(loc["file"], loc["line"])
 
     def body(self):
         loc = self.get_data().find("location")
-        return "%s:%s" % (loc["bodyfile"], loc["bodystart"])
-        
+        return location(loc["bodyfile"], loc["bodystart"])
+
+    def argstring(self):
+        arst = self.get_data().find("argsstring")
+        if arst is None:
+            return None
+        return arst.string
+
+class location:
+    def __init__(self, fil, line):
+        self.file = fil
+        self.line = line
+
+    def str(self):
+        return "%s:%s" % (self.file, self.line)
+    
 
 for el in index.find_all("compound"):
     if not el['kind'] in idx:
@@ -106,12 +124,36 @@ if(args.list_members):
 if(args.list_statics):
     print_members("file", True)
 
+locs = []
 if args.find_member_body:
     for f in args.find_member_body:
         m = name_idx[f]
-        print m.body()
+        locs.append(m.body())
 
 if args.find_member_decl:
     for f in args.find_member_decl:
         m = name_idx[f]
-        print m.location()
+        locs.append(m.location())
+
+# Finds a static in the name argid/contents
+if args.find_static:
+    print "Loading information about static members:"
+    for obj in idx["file"].values():
+        print " -> %s " % obj.name
+        obj.get_data()
+    for f in args.find_static:
+        for obj in idx["file"].values():
+            for el in obj.members.values():
+                argstring = el.argstring()
+                if argstring and (f in argstring):
+                    locs.append(el.location())
+
+if args.emacs:
+    cmdline = ["emacs"]
+    for loc in locs:
+        cmdline.append("+%s" % loc.line)
+        cmdline.append(loc.file)
+    subprocess.call(cmdline)
+else:
+    for loc in locs:
+        print loc.str()
