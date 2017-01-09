@@ -1,0 +1,76 @@
+#!/usr/bin/ruby
+
+# Copyright 2017 by Vincent Fourmond
+# This program is free software. It is distributed under the terms of the
+# GNU General Public License version 3.0 or later, found at
+# https://www.gnu.org/copyleft/gpl.html
+#
+# There is NO WARRANTY.
+
+# To get all the icon themes
+# apt search -- -icon-theme | grep / | cut -d/ -f1 | xargs ./make-theme-image 
+
+
+for file in ARGV
+  if file =~ /([^_]+)_.*deb/
+    pkg = $1
+  else
+    pkg = file
+    puts "Downloading package #{pkg}"
+    system "dget", pkg
+    file = Dir::glob("#{pkg}_*deb").sort {|a,b|
+      File::mtime(a) <=> File::mtime(b)
+    }.last
+    puts " => using file #{file}"
+  end
+
+
+  # What we want ;-)...
+  what = %w(go-next go-previous folder-new document-new accessories-calculator applications-science dialog-error dialog-error dialog-question)
+
+  # A hash 'code-name' -> { res -> file }
+  files = {}
+  IO::popen(["dpkg-deb", "-c", file]) do |f|
+    for l in f
+      if l =~ /\.(.*\/(\d+)x(\d+)(?:@[^\/]+)?\/.*\/([^\/ ]+).(png|svg))/
+        cn = $4
+        res = $2.to_i
+        files[cn] ||= {}
+        files[cn][res] = $1
+      end
+    end
+  end
+
+  cmdline = ["montage", '-geometry', '64x64+2+2']
+  extracted = true
+
+  nb = 0
+  for w in what
+    # we pick the highest resolution
+    if ! files[w]
+      puts "Missing from theme: #{w}"
+      cmdline << 'magick:granite'
+    else
+      br = files[w].keys.sort.last
+      fl = ".cache" + files[w][br]
+      if ! File.readable?(fl)
+        extracted = false
+      end
+      nb += 1
+      cmdline << fl
+    end
+  end
+
+  cmdline << "#{pkg}.png"
+
+
+  if ! extracted
+    puts "Extracting #{file} to the .cache directory"
+    system "dpkg-deb", "-x", file, ".cache"
+  end
+
+  if nb > 0
+    puts "Running: #{cmdline.join(" ")}"
+    system *cmdline
+  end
+end
