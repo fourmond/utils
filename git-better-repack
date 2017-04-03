@@ -1,0 +1,95 @@
+#! /usr/bin/python
+
+# Copyright 2017 by Vincent Fourmond
+# This program is free software. It is distributed under the terms of the
+# GNU General Public License version 3.0 or later, found at
+# https://www.gnu.org/copyleft/gpl.html
+#
+# There is NO WARRANTY.
+
+# I'm unsure what this does as of now, but it's going to be fun !
+
+import os
+import re
+import os.path
+import glob
+
+if not os.path.isdir(".git"):
+    raise "Must be at the root of a git repository"
+
+# with os.popen('git', ['git', 'pack-redundant', '--all']) as gpr:
+
+def drop_redundant_packs():
+    with os.popen('git pack-redundant --all') as gpr:
+        for line in gpr:
+            pck = line.rstrip()
+            print "Removing redundant pack: %s" % pck
+            os.unlink(pck)
+
+class git_object:
+    def __init__(self, lst):
+        self.sha1 = lst[0]
+        self.kind = lst[1]
+        self.size = int(lst[2])
+        self.packed_size = int(lst[3])
+        if len(lst) > 6:
+            self.base = lst[6]
+        else:
+            self.base = False
+
+    def __str__(self):
+        delta = ""
+        if self.base:
+            delta = " (delta)"
+        
+        return "object: %s, %s, size: %d/%d %s" % (self.sha1,
+                                                   self.kind,
+                                                   self.size,
+                                                   self.packed_size,
+                                                   delta)
+
+class packfile:
+    def __init__(self, pck):
+        self.pack_file = pck
+        self.objects = []
+
+    def __str__(self):
+        return "packfile: %s, size: %d, %d objects" % (self.pack_file,
+                                                       self.size,
+                                                       len(self.objects))
+    def read_pack(self):
+        self.size = os.path.getsize(pck)
+        with os.popen('git verify-pack -v %s' % self.pack_file) as gvp:
+            for line in gvp:
+                lst = line.split()
+                if len(lst[0]) == 40:
+                    self.objects.append(git_object(lst))
+                    # print self.objects[-1]
+
+drop_redundant_packs()
+
+# Now, walk over all the pack files, gathers the one that are smaller
+# than a predefined pack size until their whole size is about the threshold
+sz = 10*1024**2
+packs = []
+ts = 0
+for pck in glob.glob(".git/objects/pack/*.pack"):
+    if os.path.getsize(pck) < sz*0.8:
+        pack = packfile(pck)
+        pack.read_pack()
+        packs.append(pack)
+        ts += pack.size
+        if ts > 0.8*sz:
+            print "Repacking packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
+            with os.popen('git pack-objects .git/objects/pack/pack', 'w') as gpa:
+                for pck in packs:
+                    for o in pck.objects:
+                        gpa.write("%s\n" % o.sha1)
+            packs = []
+            ts = 0
+
+        print pack
+    else:
+        print "Pack %s too big, not touching it" % pck
+
+drop_redundant_packs()
