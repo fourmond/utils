@@ -14,6 +14,30 @@ import re
 import os.path
 import glob
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-s", "--size", type=int,
+                    help="size (MB)")
+parser.add_argument("-n", "--dry-run",action="store_true",
+                    help="dry run (don't repack)")
+parser.add_argument("-r", "--repack-size", type=int,
+                    help="size of loose objects necessary to run git-repack (MB)")
+args = parser.parse_args()
+
+# Provide default values
+if args.size:                   # in bytes !
+    args.size *= 1024**2
+else:
+    args.size = 10*1024**2
+
+if args.repack_size:            
+    args.repack_size *= 1024 # in KB, compared to count_objects
+else:
+    args.repack_size = 10*1024
+
+
+
 if not os.path.isdir(".git"):
     raise "Must be at the root of a git repository"
 
@@ -25,6 +49,14 @@ def drop_redundant_packs():
             pck = line.rstrip()
             print "Removing redundant pack: %s" % pck
             os.unlink(pck)
+
+def count_objects():
+    rv = dict()
+    with os.popen('git count-objects -v') as gco:
+        for line in gco:
+            lst = line.split(":")
+            rv[lst[0]] = int(lst[1])
+    return rv
 
 class git_object:
     def __init__(self, lst):
@@ -66,30 +98,49 @@ class packfile:
                     self.objects.append(git_object(lst))
                     # print self.objects[-1]
 
-drop_redundant_packs()
+    @staticmethod
+    def repack(packs, dry_run=False):
+        """Repacks the given packs"""
+        if dry_run:
+            print "Would repack packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
+                
+        else:
+            print "Repacking packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
+            with os.popen('git pack-objects .git/objects/pack/pack --threads=1', 'w') as gpa:
+                for pck in packs:
+                    for o in pck.objects:
+                        gpa.write("%s\n" % o.sha1)
 
-# Now, walk over all the pack files, gathers the one that are smaller
+
+
+
+
+    # Now, walk over all the pack files, gathers the one that are smaller
 # than a predefined pack size until their whole size is about the threshold
-sz = 10*1024**2
+
+co = count_objects()
+if co["size"] > args.repack_size:
+    os.system("git repack --threads=1")
+
+
+drop_redundant_packs()
+    
 packs = []
 ts = 0
 for pck in glob.glob(".git/objects/pack/*.pack"):
-    if os.path.getsize(pck) < sz*0.8:
+    if os.path.getsize(pck) < args.size*0.8:
         pack = packfile(pck)
         pack.read_pack()
         packs.append(pack)
         ts += pack.size
-        if ts > 0.8*sz:
-            print "Repacking packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
-            with os.popen('git pack-objects .git/objects/pack/pack', 'w') as gpa:
-                for pck in packs:
-                    for o in pck.objects:
-                        gpa.write("%s\n" % o.sha1)
+        if ts > 0.8*args.size:
+            packfile.repack(packs, args.dry_run)
             packs = []
             ts = 0
-
         print pack
     else:
         print "Pack %s too big, not touching it" % pck
 
+if len(packs) > 0:
+    packfile.repack(packs, args.dry_run)
 drop_redundant_packs()
