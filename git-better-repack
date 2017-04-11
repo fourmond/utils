@@ -38,27 +38,46 @@ else:
 
 
 
-if not os.path.isdir(".git"):
-    raise "Must be at the root of a git repository"
+class git_rep:
+    """A whole git repository"""
 
-# with os.popen('git', ['git', 'pack-redundant', '--all']) as gpr:
+    def __init__(self):
+        """Creates a repository referring to the current directory"""
+        if os.path.isdir(".git/objects"):
+            self.obj_dir = ".git/objects"
+        elif os.path.isdir("objects"):
+            self.obj_dir = "objects" # bare repository
+        else:
+            raise RuntimeError("Must be at the root of a git repository")
 
-def drop_redundant_packs():
-    with os.popen('git pack-redundant --all') as gpr:
-        for line in gpr:
-            pck = line.rstrip()
-            print "Removing redundant pack: %s" % pck
-            os.unlink(pck)
+    def list_packs(self):
+        # List pack files
+        self.packs = []
+        for pck in glob.glob(self.obj_dir + "/pack/*.pack"):
+            self.packs.append(packfile(pck))
+        return self.packs
 
-def count_objects():
-    rv = dict()
-    with os.popen('git count-objects -v') as gco:
-        for line in gco:
-            lst = line.split(":")
-            rv[lst[0]] = int(lst[1])
-    return rv
 
-class git_object:
+    def count_objects(self):
+        rv = dict()
+        with os.popen('git count-objects -v') as gco:
+            for line in gco:
+                lst = line.split(":")
+                rv[lst[0]] = int(lst[1])
+        self.count_objects = rv
+        return self.count_objects
+
+    def repack(self):
+        os.system("git repack --threads=1")
+
+    def drop_redundant_packs(self):
+        with os.popen('git pack-redundant --all') as gpr:
+            for line in gpr:
+                pck = line.rstrip()
+                print "Removing redundant pack: %s" % pck
+                os.unlink(pck)
+
+class packed_object:
     def __init__(self, lst):
         self.sha1 = lst[0]
         self.kind = lst[1]
@@ -83,6 +102,7 @@ class git_object:
 class packfile:
     def __init__(self, pck):
         self.pack_file = pck
+        self.size = os.path.getsize(pck)
         self.objects = []
 
     def __str__(self):
@@ -90,12 +110,11 @@ class packfile:
                                                        self.size,
                                                        len(self.objects))
     def read_pack(self):
-        self.size = os.path.getsize(pck)
         with os.popen('git verify-pack -v %s' % self.pack_file) as gvp:
             for line in gvp:
                 lst = line.split()
                 if len(lst[0]) == 40:
-                    self.objects.append(git_object(lst))
+                    self.objects.append(packed_object(lst))
                     # print self.objects[-1]
 
     @staticmethod
@@ -113,23 +132,22 @@ class packfile:
 
 
 
+rep = git_rep()
 
 
     # Now, walk over all the pack files, gathers the one that are smaller
 # than a predefined pack size until their whole size is about the threshold
 
-co = count_objects()
+co = rep.count_objects()
 if co["size"] > args.repack_size:
-    os.system("git repack --threads=1")
+    rep.repack()
 
-
-drop_redundant_packs()
+rep.drop_redundant_packs()
     
 packs = []
 ts = 0
-for pck in glob.glob(".git/objects/pack/*.pack"):
-    if os.path.getsize(pck) < args.size*0.8:
-        pack = packfile(pck)
+for pack in rep.list_packs():
+    if pack.size < args.size*0.8:
         pack.read_pack()
         packs.append(pack)
         ts += pack.size
@@ -139,8 +157,6 @@ for pck in glob.glob(".git/objects/pack/*.pack"):
             ts = 0
         print pack
     else:
-        print "Pack %s too big, not touching it" % pck
+        print "Pack %s too big, not touching it" % pack
 
-if len(packs) > 0:
-    packfile.repack(packs, args.dry_run)
-drop_redundant_packs()
+rep.drop_redundant_packs()
