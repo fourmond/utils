@@ -16,6 +16,8 @@ parser = argparse.ArgumentParser(description='...')
 parser.add_argument('--list-classes', action='store_true')
 parser.add_argument('--list-members', action='store_true')
 parser.add_argument('--list-statics', action='store_true')
+parser.add_argument('--list-refs', action='store_true')
+parser.add_argument('--dump-members', action='store_true')
 parser.add_argument('--find-member-body', action='append')
 parser.add_argument('--find-member-decl', action='append')
 
@@ -25,6 +27,7 @@ parser.add_argument('--emacs', action='store_true')
 
 args = parser.parse_args()
 
+# Todo: wrap these variables into a class
 # A dictionnary:
 idx = {}
 
@@ -32,10 +35,13 @@ name_idx = {}
 
 
 class compound:
+    all_compounds = {}
+
     def __init__(self,el):
         self.name = el.find("name", recursive=False).string
         self.kind = el['kind']
         self.ref = el['refid']
+        self.all_compounds[self.ref] = self
         self.members = {}
         self.data = None
 
@@ -44,19 +50,38 @@ class compound:
             self.data = bs4.BeautifulSoup(open("xml/%s.xml" % self.ref), "lxml")
         return self.data
 
+    def all_references(self):
+        """Returns all the references, as a dictionnary compound => [refs]"""
+        refs = []
+        for m in self.members.values():
+            refs.extend(m.referenced_by())
+        return member.classify_members(refs)
+
 class member:
+
+    all_members = {}
+    
     def __init__(self, parent, sel):
         nm2 = sel.find("name", recursive=False).string
         self.name = nm2
         self.parent = parent
         self.ref = sel['refid']
+        self.all_members[self.ref] = self
         self.kind = sel['kind']
         self.data = None
+        self.refed_by = None
 
-    def full_name(self):
-        if self.parent.kind == "namespace" or self.parent.kind == "class":
-            return "%s::%s" % (self.parent.name, self.name)
-        return self.name
+    def full_name(self, include_args = False):
+        if include_args:
+            bn = self.full_name()
+            argst = self.argstring()
+            if argst is not None:
+                bn += argst
+            return bn
+        else:
+            if self.parent.kind == "namespace" or self.parent.kind == "class":
+                return "%s::%s" % (self.parent.name, self.name)
+            return self.name
 
     def get_data(self):
         if self.data is None:
@@ -77,6 +102,30 @@ class member:
         if arst is None:
             return None
         return arst.string
+
+    @staticmethod
+    def classify_members(members):
+        """From a list of members, returns a dictionnary compound => [list of members"""
+        rv = {}
+        for m in members:
+            if m.parent not in rv:
+                rv[m.parent] = []
+            rv[m.parent].append(m)
+        return rv
+
+    def referenced_by(self, categorize = False):
+        """Returns the list of members referencing this member."""
+        if self.refed_by is None:
+            dat = self.get_data()
+            self.refed_by = []
+            for r in dat.find_all("referencedby"):
+                if r['refid'] in self.all_members:
+                    m = self.all_members[r['refid']]
+                    self.refed_by.append(m)
+                else:
+                    print "Could not find compound : %s" % r['refid']
+        return self.refed_by
+            
 
 class location:
     def __init__(self, fil, line):
@@ -104,7 +153,7 @@ for el in index.find_all("compound"):
 def print_classes():
     print "\n".join(sorted(idx["class"].keys()))
 
-def print_members(what = "class", print_compound = False):
+def print_members(what = "class", print_compound = False, dump = False):
     for cls in sorted(idx[what].keys()):
         cls = idx[what][cls]
         if len(cls.members) == 0:
@@ -113,7 +162,72 @@ def print_members(what = "class", print_compound = False):
             print "%s:" % cls.name
         for m in sorted(cls.members.keys()):
             m = cls.members[m]
+            if dump:
+                print '=' * 70
             print "%s (%s)" % (m.full_name(), m.kind)
+            if dump:
+                print m.get_data()
+                print "\n\n"
+
+def print_refs(by_class = True):
+    compounds = []
+    members = []
+
+    # First run to ensure all the refs are found
+    for c in idx.keys():
+        cur = idx[c]
+        for cn in cur.keys():  # cls but not necessarily class
+            cls = cur[cn]
+            compounds.append(cls)
+            # print cls
+            for m in cls.members.values():
+                members.append(m)
+                # print "Member: %s -> %s" % (m.full_name(), m.ref)
+    if by_class:
+        for cls in sorted(compounds, key= lambda c: c.name):
+            refs = cls.all_references()
+            tot = 0
+            for r in refs.values():
+                tot += len(r)
+            nb_internal = 0
+            if cls in refs:
+                nb_internal = len(refs[cls])
+
+            print "%s: %d internal, %d other" % (cls.name, nb_internal, tot - nb_internal)
+            for m in sorted(cls.members.keys()):
+                m = cls.members[m]
+                rfs = m.referenced_by()
+                nb = len(rfs)
+                rfs = [x for x in rfs if x.parent != cls]
+                nb_ext = len(rfs)
+                al = m.argstring()
+                if al is None:
+                    al = ""
+                rn = ', '.join(map(lambda x: x.full_name(True), rfs))
+                if len(rn) > 0:
+                    rn = "\n   -> %s" % rn
+                print " - %s%s: %d external, %d internal%s" % (
+                    m.name, al, nb_ext, nb - nb_ext, rn
+                )
+            print "\n\n"
+            
+    else:
+        # Print
+        members = sorted(members, key = lambda x: -len(x.referenced_by()))
+        for m in members:
+            refs = m.referenced_by()
+            cr = member.classify_members(refs)
+            nb = len(refs)
+            nb_int = 0
+            if m.parent in cr:
+                nb_int = len(cr[m.parent])
+            print "%s: \n - %d (%d internal): (%s)" % (
+                m.full_name(True),
+                nb,
+                nb_int,
+                ", ".join(map(lambda x: x.full_name(True),
+                              m.referenced_by()))
+            )
 
 if(args.list_classes):
     print_classes()
@@ -121,8 +235,14 @@ if(args.list_classes):
 if(args.list_members):
     print_members()
 
+if(args.dump_members):
+    print_members(dump = True)
+
 if(args.list_statics):
     print_members("file", True)
+
+if(args.list_refs):
+    print_refs()
 
 locs = []
 if args.find_member_body:
