@@ -15,10 +15,17 @@ import os.path
 import glob
 
 import argparse
+import random
+import shutil
+import subprocess
 
 parser = argparse.ArgumentParser()
+parser.add_argument("action", default=['dump-objects'], nargs='*',
+                    help="action to be performed")
 parser.add_argument("-s", "--size", type=int,
                     help="size (MB)")
+parser.add_argument("--mess-up", type=int,
+                    help="create a fake repository based on the files in the current directory with several operations")
 parser.add_argument("-n", "--dry-run",action="store_true",
                     help="dry run (don't repack)")
 parser.add_argument("-r", "--repack-size", type=int,
@@ -42,7 +49,7 @@ class git_rep:
     """A whole git repository"""
 
     def __init__(self):
-        """Creates a repository referring to the current directory"""
+        """Creates a repository object referring to the current directory"""
         if os.path.isdir(".git/objects"):
             self.obj_dir = ".git/objects"
         elif os.path.isdir("objects"):
@@ -51,10 +58,11 @@ class git_rep:
             raise RuntimeError("Must be at the root of a git repository")
 
     def list_packs(self):
-        # List pack files
+        """Finds all pack files, and record them. Does not read them, though,
+as it can be soo long !"""
         self.packs = []
         for pck in glob.glob(self.obj_dir + "/pack/*.pack"):
-            self.packs.append(packfile(pck))
+            self.packs.append(packfile(pck, self))
         return self.packs
 
 
@@ -67,7 +75,8 @@ class git_rep:
         self.count_objects = rv
         return self.count_objects
 
-    def repack(self):
+    def pack_loose_objects(self):
+        """Runs git repack to pack loose objects"""
         os.system("git repack --threads=1")
 
     def drop_redundant_packs(self):
@@ -77,16 +86,44 @@ class git_rep:
                 print "Removing redundant pack: %s" % pck
                 os.unlink(pck)
 
+    def repack(self, args):
+        pass
+
+    def cross_reference_objects(self):
+        """Runs over all the packs, and records all the objects' SHA1 together
+with the packs they are found in. Assumes the packs are already read. Returns the shas of duplicate objects"""
+        self.all_objects = {}
+        dups = []
+        for pck in self.packs:
+            for obj in pck.objects.values():
+                if not obj.sha1 in self.all_objects:
+                    self.all_objects[obj.sha1] = []
+                else:
+                    dups.append(obj.sha1)
+                self.all_objects[obj.sha1].append(pck)
+        return dups
+
+    def dump_objects(self):
+        for pck in self.list_packs():
+            print "Reading pack %s" % pck.pack_file
+            pck.read_pack()
+            print " -> %s " % pck.stats()
+        dups = self.cross_reference_objects()
+        print "%d duplicate objects" % len(dups)
+        
+
 class packed_object:
-    def __init__(self, lst):
+    def __init__(self, lst, pck):
         self.sha1 = lst[0]
         self.kind = lst[1]
         self.size = int(lst[2])
         self.packed_size = int(lst[3])
+        self.pack = pck
+        self.base = None
         if len(lst) > 6:
-            self.base = lst[6]
+            self.base_ref = lst[6]
         else:
-            self.base = False
+            self.base_ref = False
 
     def __str__(self):
         delta = ""
@@ -100,10 +137,11 @@ class packed_object:
                                                    delta)
 
 class packfile:
-    def __init__(self, pck):
+    def __init__(self, pck, rep):
         self.pack_file = pck
         self.size = os.path.getsize(pck)
-        self.objects = []
+        self.objects = {}
+        self.rep = rep
 
     def __str__(self):
         return "packfile: %s, size: %d, %d objects" % (self.pack_file,
@@ -114,8 +152,29 @@ class packfile:
             for line in gvp:
                 lst = line.split()
                 if len(lst[0]) == 40:
-                    self.objects.append(packed_object(lst))
-                    # print self.objects[-1]
+                    obj = packed_object(lst, self)
+                    self.objects[obj.sha1] = obj
+        # Now, we go over them again, cross-referencing them.
+        for obj in self.objects.values():
+            if obj.base_ref:
+                obj.base = self.objects[obj.base_ref]
+            else:
+                obj.base = None
+
+    def stats(self):
+        st = {
+            'objects': 0,
+            'total_size': 0,
+            'deltas': 0,
+            'packed_size':0
+        }
+        for obj in self.objects.values():
+            st['objects'] += 1
+            if obj.base is not None:
+                st['deltas'] += 1
+            st['total_size'] += obj.size
+            st['packed_size'] += obj.packed_size
+        return st
 
     @staticmethod
     def repack(packs, dry_run=False):
@@ -132,31 +191,107 @@ class packfile:
 
 
 
+                        
+def mess_up(mu):
+    """Creates a git repository in a subdirectory, and add files and modify them randomly"""
+    orig_files = map(lambda x: "../%s" % x, glob.glob('*'))
+    print orig_files
+    os.mkdir("tst-git")
+    os.chdir("tst-git")
+    os.system("git init")
+    cur_files = []
+
+    def call(*args):
+        print "Running: '%s'" % ("', '".join(args))
+        subprocess.call(args)
+
+    nbt = len(orig_files)/2
+    if nbt < 1:
+        nbt = 1
+    elif nbt >= 100:
+        nbt = 99
+    
+    while mu > 0:
+        mu -= 1
+        action = random.randint(0,1)
+        nn = "file_%02d" % (random.randint(0, nbt))
+        if action == 0:         # copy from below
+            of = random.choice(orig_files)
+            shutil.copy(of, nn)
+            call('git', 'add', nn)
+            call('git', 'commit', '-m', "Imported %s to %s" % (of, nn))
+            cur_files.append(nn)
+        elif len(cur_files) > 0:
+            if action == 1:
+                # Add some bits of the file
+                of = random.choice(cur_files)
+                if of == nn:
+                    mu += 1
+                    continue
+                nb = random.randint(10,20)
+                with open(of, "rb") as src:
+                    with open(nn, 'wb') as dst:
+                        bts = src.read()
+                        dst.write(bts)
+                        dst.write(os.urandom(nb))
+                call('git', 'add', nn)
+                call('git', 'commit', '-m', "Copied %s to %s and added %d bytes" % (of, nn, nb))
+        else:
+            mu += 1
+            continue
+        repack = random.randint(0,2) < 1
+        if repack:
+            print "\n\n\nRepack"
+            call('git', 'repack')
+            print "-> done\n"
+            
+
+        
+            
+
+if args.mess_up:
+    mess_up(args.mess_up)
+    exit()
+
 rep = git_rep()
 
+actions = {
+    'repack': lambda: rep.repack(args),
+    'dump-objects': rep.dump_objects
+}
 
-    # Now, walk over all the pack files, gathers the one that are smaller
-# than a predefined pack size until their whole size is about the threshold
 
-co = rep.count_objects()
-if co["size"] > args.repack_size:
-    rep.repack()
-
-rep.drop_redundant_packs()
-    
-packs = []
-ts = 0
-for pack in rep.list_packs():
-    if pack.size < args.size*0.8:
-        pack.read_pack()
-        packs.append(pack)
-        ts += pack.size
-        if ts > 0.8*args.size:
-            packfile.repack(packs, args.dry_run)
-            packs = []
-            ts = 0
-        print pack
+for action in args.action:
+    code = actions.get(action, None)
+    if code is not None:
+        code()
     else:
-        print "Pack %s too big, not touching it" % pack
+        print "Unkown action: %s" % action
 
-rep.drop_redundant_packs()
+
+
+#     # Now, walk over all the pack files, gathers the one that are smaller
+# # than a predefined pack size until their whole size is about the threshold
+
+# co = rep.count_objects()
+# if co["size"] > args.repack_size:
+#     rep.repack()
+
+# rep.drop_redundant_packs()
+    
+# packs = []
+# ts = 0
+# for pack in rep.list_packs():
+#     if pack.size < args.size*0.8:
+#         pack.read_pack()
+#         packs.append(pack)
+#         ts += pack.size
+#         if ts > 0.8*args.size:
+#             packfile.repack(packs, args.dry_run)
+#             packs = []
+#             ts = 0
+#         print pack
+#     else:
+#         print "Pack %s too big, not touching it" % pack
+
+# rep.drop_redundant_packs()
