@@ -104,12 +104,18 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         return dups
 
     def dump_objects(self):
+        st = {}
         for pck in self.list_packs():
             print "Reading pack %s" % pck.pack_file
             pck.read_pack()
-            print " -> %s " % pck.stats()
+            pck.read_object_sizes()
+            sts = pck.stats()
+            print " -> %s " % sts
+            for n in sts.keys():
+                st[n] = st.get(n, 0) + sts[n]
         dups = self.cross_reference_objects()
         print "%d duplicate objects" % len(dups)
+        print st
         
 
 class packed_object:
@@ -118,12 +124,20 @@ class packed_object:
         self.kind = lst[1]
         self.size = int(lst[2])
         self.packed_size = int(lst[3])
+        self.file_size = None
         self.pack = pck
         self.base = None
         if len(lst) > 6:
             self.base_ref = lst[6]
         else:
             self.base_ref = False
+
+    def read_size(self):
+        with os.popen('git cat-file -s %s' % self.sha1) as gcf:
+            for line in gcf:
+                self.file_size = int(line)
+        return self.file_size
+
 
     def __str__(self):
         delta = ""
@@ -161,9 +175,27 @@ class packfile:
             else:
                 obj.base = None
 
+    def read_object_sizes(self):
+        """Reads the sizes of all the objects"""
+        proc = subprocess.Popen(['git','cat-file',
+                                 '--batch-check=%(objectsize)'],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                stdin=subprocess.PIPE)
+        objs = self.objects.values();
+        inp = "\n".join(map(lambda x: x.sha1, objs))
+        out, err = proc.communicate(inp)
+        i = 0
+        for ln in out.split("\n"):
+            if len(ln) < 1:
+                break
+            objs[i].file_size = int(ln)
+            i+= 1
+        
     def stats(self):
         st = {
             'objects': 0,
+            'object_size': 0,
             'total_size': 0,
             'deltas': 0,
             'packed_size':0
@@ -172,7 +204,9 @@ class packfile:
             st['objects'] += 1
             if obj.base is not None:
                 st['deltas'] += 1
-            st['total_size'] += obj.size
+            st['object_size'] += obj.size
+            if obj.file_size is not None:
+                st['total_size'] += obj.file_size
             st['packed_size'] += obj.packed_size
         return st
 
@@ -202,7 +236,7 @@ def mess_up(mu):
     cur_files = []
 
     def call(*args):
-        print "Running: '%s'" % ("', '".join(args))
+        # print "Running: '%s'" % ("', '".join(args))
         subprocess.call(args)
 
     nbt = len(orig_files)/2
@@ -240,7 +274,7 @@ def mess_up(mu):
             mu += 1
             continue
         repack = random.randint(0,2) < 1
-        if repack:
+        if repack or mu == 0:
             print "\n\n\nRepack"
             call('git', 'repack')
             print "-> done\n"
