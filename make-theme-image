@@ -8,10 +8,31 @@
 # There is NO WARRANTY.
 
 # To get all the icon themes
-# apt search -- -icon-theme | grep / | cut -d/ -f1 | xargs ./make-theme-image 
+# apt search -- -icon-theme | grep / | cut -d/ -f1 | xargs ./make-theme-image
 
+require 'optparse'
+
+# Look for the meanings of the names in https://standards.freedesktop.org/icon-naming-spec/icon-naming-spec-latest.html
+what = %w(go-next go-previous folder-new document-new accessories-calculator applications-science dialog-error dialog-error dialog-question)
+
+
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: make-theme-image [options] packages..."
+
+  opts.on("-w", "--what LIST", "comma-separated list of the images to show") do |v|
+    what = v.split(/\s*,\s*/)
+  end
+  opts.on("-a", "--append LIST", "comma-separated list to append to images to show") do |v|
+    what += v.split(/\s*,\s*/)
+  end
+end.parse!
+
+print "Will look for the following icons: #{what.join(", ")}"
 
 for file in ARGV
+  puts "\n\nDealing with #{file}:"
+  
   if file =~ /([^_]+)_.*deb/
     pkg = $1
   else
@@ -26,7 +47,6 @@ for file in ARGV
 
 
   # What we want ;-)...
-  what = %w(go-next go-previous folder-new document-new accessories-calculator applications-science dialog-error dialog-error dialog-question)
 
   # A hash 'code-name' -> { res -> file }
   files = {}
@@ -45,10 +65,11 @@ for file in ARGV
   extracted = true
 
   nb = 0
+  miss = []
   for w in what
     # we pick the highest resolution
     if ! files[w]
-      puts "Missing from theme: #{w}"
+      miss << w
       cmdline << 'magick:granite'
     else
       br = files[w].keys.sort.last
@@ -60,6 +81,9 @@ for file in ARGV
       cmdline << fl
     end
   end
+  if miss.size > 0
+    puts "Missing from theme: #{miss.join(", ")}"
+  end
 
   cmdline << "#{pkg}.png"
 
@@ -70,7 +94,9 @@ for file in ARGV
   end
 
   if nb > 0
-    puts "Running: #{cmdline.join(" ")}"
+    # puts "Running: #{cmdline.join(" ")}"
     system *cmdline
+  else
+    puts "No icon found !"
   end
 end
