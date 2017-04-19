@@ -75,9 +75,10 @@ as it can be soo long !"""
         self.count_objects = rv
         return self.count_objects
 
-    def pack_loose_objects(self):
-        """Runs git repack to pack loose objects"""
-        os.system("git repack --threads=1")
+    def cheap_gc(self):
+        """Runs git repack to pack loose objects and cleanup packs. A weak but
+cheap version of git gc"""
+        os.system("git repack -d --threads=1")
 
     def drop_redundant_packs(self):
         with os.popen('git pack-redundant --all') as gpr:
@@ -86,8 +87,27 @@ as it can be soo long !"""
                 print "Removing redundant pack: %s" % pck
                 os.unlink(pck)
 
-    def repack(self, args):
-        pass
+    def simple_repack(self, size_threshold, tolerance = 1.5,
+                      dry_run = False):
+        """Given a threshold of pack size, consolidate all packs significantly
+smaller than the threshold into single packs whose size shouldn't
+exceed tolerance times the threshold."""
+        self.cheap_gc()
+        packs = []
+        ts = 0
+        rt = size_threshold * tolerance * 0.5
+        for pack in rep.list_packs():
+            if pack.size < rt:
+                pack.read_pack()
+                packs.append(pack)
+                ts += pack.size
+                if ts > rt:
+                    packfile.repack(packs, dry_run)
+                    packs = []
+                    ts = 0
+                    print pack
+                else:
+                    print "Pack %s too big, not touching it" % pack
 
     def cross_reference_objects(self):
         """Runs over all the packs, and records all the objects' SHA1 together
@@ -230,9 +250,13 @@ def mess_up(mu):
     """Creates a git repository in a subdirectory, and add files and modify them randomly"""
     orig_files = map(lambda x: "../%s" % x, glob.glob('*'))
     print orig_files
-    os.mkdir("tst-git")
+    if not os.path.isdir(".git/objects"):
+        os.mkdir("tst-git")
     os.chdir("tst-git")
-    os.system("git init")
+    if not os.path.isdir(".git"):
+        os.system("git init")
+
+    
     cur_files = []
 
     def call(*args):
@@ -290,7 +314,7 @@ if args.mess_up:
 rep = git_rep()
 
 actions = {
-    'repack': lambda: rep.repack(args),
+    'repack': lambda: rep.simple_repack(args.size, dry_run = args.dry_run),
     'dump-objects': rep.dump_objects
 }
 

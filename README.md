@@ -23,7 +23,7 @@ Not all the icons are provided by each package.
 To make thumbnails for **all** icon theme packages, try this:
 
 ```
-apt search -- -icon-theme | grep / | cut -d/ -f1 | xargs ./make-theme-image
+apt search -- -icon-theme | grep / | cut -d/ -f1 | xargs make-theme-image
 ```
 
 
