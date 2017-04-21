@@ -19,6 +19,9 @@ import random
 import shutil
 import subprocess
 
+# For categorizing files.
+import magic
+
 parser = argparse.ArgumentParser()
 parser.add_argument("action", default=['dump-objects'], nargs='*',
                     help="action to be performed")
@@ -78,7 +81,7 @@ as it can be soo long !"""
     def cheap_gc(self):
         """Runs git repack to pack loose objects and cleanup packs. A weak but
 cheap version of git gc"""
-        os.system("git repack -d --threads=1")
+        os.system("git repack -d")
 
     def drop_redundant_packs(self):
         with os.popen('git pack-redundant --all') as gpr:
@@ -93,10 +96,12 @@ cheap version of git gc"""
 smaller than the threshold into single packs whose size shouldn't
 exceed tolerance times the threshold."""
         self.cheap_gc()
+        self.drop_redundant_packs()
         packs = []
         ts = 0
         rt = size_threshold * tolerance * 0.5
         for pack in rep.list_packs():
+            print pack
             if pack.size < rt:
                 pack.read_pack()
                 packs.append(pack)
@@ -106,8 +111,25 @@ exceed tolerance times the threshold."""
                     packs = []
                     ts = 0
                     print pack
-                else:
-                    print "Pack %s too big, not touching it" % pack
+            else:
+                print "Pack %s too big, not touching it" % pack
+        if len(packs) > 1:
+            packfile.repack(packs, dry_run)
+        self.drop_redundant_packs()
+
+    def repack_v2(self, size_threshold, tolerance = 1.5, dry_run = False):
+        """Attemps to be more clever than simple_repack by maximizing the chances of deltas"""
+        self.cheap_gc()
+        self.drop_redundant_packs()
+        packs = []
+        ts = 0
+        rt = size_threshold * tolerance * 0.5
+        for pack in rep.list_packs():
+            if pack.size < rt:
+                pack.read_pack()
+        # Hmmm need to check the file types, but also try to avoid
+        # generating too many packs...
+        
 
     def cross_reference_objects(self):
         """Runs over all the packs, and records all the objects' SHA1 together
@@ -152,6 +174,13 @@ class packed_object:
         else:
             self.base_ref = False
 
+    def root(self):
+        """The root object"""
+        if self.base is None:
+            return self
+        else:
+            return self.base.root()
+
     def read_size(self):
         with os.popen('git cat-file -s %s' % self.sha1) as gcf:
             for line in gcf:
@@ -170,11 +199,55 @@ class packed_object:
                                                    self.packed_size,
                                                    delta)
 
+
+class interconnected_objects:
+    """A series of objects in a pack that are dependent on one another (in
+terms of storage, i.e. objects that are deltas of a single root object"""
+
+    def __init__(self, ele):
+        self.root = ele.root()
+        # Elements inside the 
+        self.objects = {}
+        self.add_object(ele)
+
+    def is_sibling(self, obj):
+        """Returns true if the object is a sibling (or already in) the pack"""
+        return obj.root() == self.root
+
+    def add_object(self, obj):
+        if not self.is_sibling(obj):
+            raise "Wrong object"
+
+        while True:
+            base = obj.base
+            if base is None or base in self.objects:
+                break
+            self.objects[obj] = base
+            obj = base
+
+    def stats(self):
+        st = {
+            'objects': len(self.objects),
+            'object_size': 0,
+            'total_size': 0,
+            'packed_size':0
+        }
+        for obj in self.objects.values():
+            st['object_size'] += obj.size
+            if obj.file_size is not None:
+                st['total_size'] += obj.file_size
+            st['packed_size'] += obj.packed_size
+        return st
+            
+        
+
 class packfile:
     def __init__(self, pck, rep):
         self.pack_file = pck
         self.size = os.path.getsize(pck)
         self.objects = {}
+        self.interconnected_objects = {}
+        self.lone_objects = set()
         self.rep = rep
 
     def __str__(self):
@@ -194,6 +267,19 @@ class packfile:
                 obj.base = self.objects[obj.base_ref]
             else:
                 obj.base = None
+
+        # A pass to categorize the objects, has to come second for the
+        # obj.base x-ref to be useable
+        for obj in self.objects.values():
+            if obj.base is None:
+                self.lone_objects.add(obj)
+            else:
+                root = obj.root()
+                if root in self.interconnected_objects:
+                    self.interconnected_objects[root].add_object(obj)
+                else:
+                    self.interconnected_objects[root] = interconnected_objects(obj)
+            
 
     def read_object_sizes(self):
         """Reads the sizes of all the objects"""
@@ -218,6 +304,8 @@ class packfile:
             'object_size': 0,
             'total_size': 0,
             'deltas': 0,
+            'lone_objects': len(self.lone_objects),
+            'interconnected_hierarchies': len(self.interconnected_objects),
             'packed_size':0
         }
         for obj in self.objects.values():
@@ -240,7 +328,7 @@ class packfile:
             print "Repacking packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
             with os.popen('git pack-objects .git/objects/pack/pack --threads=1', 'w') as gpa:
                 for pck in packs:
-                    for o in pck.objects:
+                    for o in pck.objects.values():
                         gpa.write("%s\n" % o.sha1)
 
 
