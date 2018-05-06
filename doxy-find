@@ -17,6 +17,7 @@ parser.add_argument('--list-classes', action='store_true')
 parser.add_argument('--list-members', action='store_true')
 parser.add_argument('--list-statics', action='store_true')
 parser.add_argument('--list-refs', action='store_true')
+parser.add_argument('--list-circular-refs', action='store_true')
 parser.add_argument('--dump-members', action='store_true')
 parser.add_argument('--find-member-body', action='append')
 parser.add_argument('--find-member-decl', action='append')
@@ -229,6 +230,75 @@ def print_refs(by_class = True):
                               m.referenced_by()))
             )
 
+def fnd(m, circles):
+    rv = []
+    for c in circles:
+        if m in c:
+            rv.append(c)
+    return rv
+
+
+def merge_circles(circles):
+    rv = {}
+    for c in circles:
+        for k in c.keys():
+            nb = 0
+            if k in rv:
+                nb = rv[k]
+            nb += c[k]
+            rv[k] = nb
+    return rv
+
+def fnd_merge(m, circles):
+    crs = fnd(m, circles)
+    if len(crs) == 0:
+        nc = {}
+        nc[m] = 0
+        circles.append(nc)
+    else:
+        if len(crs) > 1:
+            nc = merge_circles(crs)
+            for c in crs:
+                circles.remove(c)
+            circles.append(nc)
+        else:
+            nc = crs[0]
+            circles.append(nc)
+
+    return nc
+        
+
+def print_circular_refs():
+    circles = []
+
+    find_circle = lambda x: fnd_merge(x, circles)
+
+    members = []
+
+    # First run to ensure all the refs are found
+    for c in idx.keys():
+        cur = idx[c]
+        for cn in cur.keys():  # cls but not necessarily class
+            cls = cur[cn]
+            for m in cls.members.values():
+                c = find_circle(m)
+                members.append(m)
+                for r in m.referenced_by():
+                    c[m] += 1
+                    if r in c:
+                        c[r] += 1
+                    else:
+                        c[r] = 1
+        for m in members:
+            find_circle(m)      # merges all the references
+    for c in circles:
+        print "-----------------------------------------------------"
+        print "Circle with %d elements" % (len(c))
+        for m in c.keys():
+            print " * %s -> %d" % (m.full_name(), c[m])
+                
+            
+
 if(args.list_classes):
     print_classes()
 
@@ -243,6 +313,9 @@ if(args.list_statics):
 
 if(args.list_refs):
     print_refs()
+
+if(args.list_circular_refs):
+    print_circular_refs()
 
 locs = []
 if args.find_member_body:
