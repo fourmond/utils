@@ -145,7 +145,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 self.all_objects[obj.sha1].append(pck)
         return dups
 
-    def dump_objects(self):
+    def dump_objects(self, full = False):
         st = {}
         for pck in self.list_packs():
             print "Reading pack %s" % pck.pack_file
@@ -155,6 +155,10 @@ with the packs they are found in. Assumes the packs are already read. Returns th
             print " -> %s " % sts
             for n in sts.keys():
                 st[n] = st.get(n, 0) + sts[n]
+            if full:
+                for ic in pck.interconnected_objects.values():
+                    print "   - %s " % ic.stats()
+                    
         dups = self.cross_reference_objects()
         print "%d duplicate objects" % len(dups)
         print st
@@ -332,6 +336,46 @@ class packfile:
                         gpa.write("%s\n" % o.sha1)
 
 
+    def split(self, size, tolerance = 0.2):
+        """Splits the pack into packs of approximately the given size"""
+        ics = self.interconnected_objects.values()
+        print len(ics)
+        pcks = []               # List of arrays of ics
+        for i in ics:
+            fnd = False
+            for p in pcks:
+                sz = 0
+                for ic in p:
+                    sz += ic.stats()['packed_size']
+                if (sz < size) and (sz + i.stats()['packed_size'] < (1 + tolerance) * size):
+                    p.append(i)
+                    fnd = True
+                    continue
+            if fnd:
+                continue
+            pcks.append([i])
+        bs = "%s/split" % os.path.dirname(self.pack_file)
+        cmd = 'git pack-objects %s --threads=1' % bs
+        for p in pcks:
+            sz = 0
+            with os.popen(cmd, 'w') as gpa:
+                for ic in p:
+                    for o in ic.objects:
+                        gpa.write("%s\n" % o.sha1)
+            print p
+            print " -> %d || %d " % (sz, size)
+            
+
+    @staticmethod
+    def split_pack(fl, size, rep, tolerance = 0.2):
+        pck = packfile(fl, rep)
+        pck.read_pack()
+        pck.split(size, tolerance)
+
+            
+            
+
+
 
                         
 def mess_up(mu):
@@ -403,7 +447,9 @@ rep = git_rep()
 
 actions = {
     'repack': lambda: rep.simple_repack(args.size, dry_run = args.dry_run),
-    'dump-objects': rep.dump_objects
+    'split': lambda: packfile.split_pack(args.action[1], args.size, rep),
+    'dump-objects': rep.dump_objects,
+    'dump-full': lambda: rep.dump_objects(True)
 }
 
 
