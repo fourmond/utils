@@ -31,6 +31,8 @@ parser.add_argument("--big-objects", type=int,
                     help="size (kb)")
 parser.add_argument("--mess-up", type=int,
                     help="create a fake repository based on the files in the current directory with several operations")
+parser.add_argument("--dump-pack", type=str,
+                    help="dumps pack contents")
 parser.add_argument("-n", "--dry-run",action="store_true",
                     help="dry run (don't repack)")
 parser.add_argument("-r", "--repack-size", type=int,
@@ -219,9 +221,11 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
         # Hmmm, this is where one needs to be smart ?
         for pk in self.list_packs():
+            print "Reading pack %s " % pk.pack_file
             pk.read_pack()
             ics = sorted(pk.interconnected_objects.values(), key=lambda a: a.stats()['packed_size'])
             if len(ics) == 0:
+                print " -> Empty pack ?"
                 continue
             
             # Large packs, but made of only one object -> forget
@@ -255,6 +259,9 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         for d in done_pks:
             print "Not repacking %s, OK" % d.pack_file
 
+        for d in redo_pks:
+            print "Repacking  %s" % d.pack_file
+
         # Sort small things into packs
         small_pks = interconnected_objects.split_into_packs(small_ics, pack_size, tolerance)
         big_pks = interconnected_objects.split_into_packs(big_ics, pack_size, tolerance)
@@ -276,6 +283,10 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                     print "   - %s " % ic.stats()
 
         else:
+            # First rename all packs to remove
+            for pk in redo_pks:
+                pk.rename("backup")
+            
             for pk in small_pks:
                 packfile.pack_objects(pk, "small")
             for pk in big_pks:
@@ -283,7 +294,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
         for d in redo_pks:
             print "Removing pack: %s" % d.pack_file
-            os.unlink(d.pack_file)
+            packfile.remove_pack(d)
 
                 
             
@@ -350,9 +361,9 @@ terms of storage, i.e. objects that are deltas of a single root object"""
 
         while True:
             base = obj.base
+            self.objects[obj] = base
             if base is None or base in self.objects:
                 break
-            self.objects[obj] = base
             obj = base
 
     def stats(self):
@@ -362,12 +373,16 @@ terms of storage, i.e. objects that are deltas of a single root object"""
             'total_size': 0,
             'packed_size':0
         }
-        for obj in self.objects.values():
+        for obj in self.objects.keys():
             st['object_size'] += obj.size
             if obj.file_size is not None:
                 st['total_size'] += obj.file_size
             st['packed_size'] += obj.packed_size
         return st
+
+    def sha1s(self):
+        """Returns a list of all the SHA1 in the hierarchy"""
+        return map(lambda o: o.sha1, self.objects.keys())
             
     @staticmethod
     def split_into_packs(ics, pack_size, tolerance):
@@ -402,13 +417,48 @@ class packfile:
         self.size = os.path.getsize(pck)
         self.objects = {}
         self.interconnected_objects = {}
-        self.lone_objects = set()
         self.rep = rep
 
     def __str__(self):
         return "packfile: %s, size: %d, %d objects" % (self.pack_file,
                                                        self.size,
                                                        len(self.objects))
+
+    def dissect_path(self):
+        """Returns [dirname, base, sha1]"""
+        dn = os.path.dirname(self.pack_file)
+        bn = os.path.basename(self.pack_file)
+        b,c = bn.split("-")
+        sha1 = c.split(".")[0]
+        return [dn, b, sha1]
+
+    def files(self):
+        d, b, s = self.dissect_path()
+        idx = os.path.join(d, "%s-%s.idx" % (b, s))
+        return [self.pack_file, idx]
+
+    @staticmethod
+    def remove_pack(pk):
+        fls = pk.files()
+        for f in fls:
+            os.unlink(f)
+
+    def dump_objects(self):
+        for o in self.objects.values():
+            print " - %s %s" % (o.sha1, o.kind)
+        print "Hierarchies"
+        for i in self.interconnected_objects.values():
+            print " - %s " % (" ".join(map(lambda o:o.sha1, i.objects.keys())))
+
+    def rename(self, new_base):
+        d, b, s = self.dissect_path()
+        old_idx = os.path.join(d, "%s-%s.idx" % (b, s))
+        new_pack = os.path.join(d, "%s-%s.pack" % (new_base, s))
+        new_idx = os.path.join(d, "%s-%s.idx" % (new_base, s))
+        os.rename(old_idx, new_idx)
+        os.rename(self.pack_file, new_pack)
+        self.pack_file = new_pack
+    
     def read_pack(self):
         with os.popen('git verify-pack -v %s' % self.pack_file) as gvp:
             for line in gvp:
@@ -426,14 +476,10 @@ class packfile:
         # A pass to categorize the objects, has to come second for the
         # obj.base x-ref to be useable
         for obj in self.objects.values():
-            if obj.base is None:
-                self.lone_objects.add(obj)
-            else:
-                root = obj.root()
-                if root in self.interconnected_objects:
-                    self.interconnected_objects[root].add_object(obj)
-                else:
-                    self.interconnected_objects[root] = interconnected_objects(obj)
+            root = obj.root()
+            if root not in self.interconnected_objects:
+                self.interconnected_objects[root] = interconnected_objects(obj)
+            self.interconnected_objects[root].add_object(obj)
             
 
     def read_object_sizes(self):
@@ -459,7 +505,6 @@ class packfile:
             'object_size': 0,
             'total_size': 0,
             'deltas': 0,
-            'lone_objects': len(self.lone_objects),
             'interconnected_hierarchies': len(self.interconnected_objects),
             'packed_size':0
         }
@@ -496,8 +541,8 @@ class packfile:
                                  "--threads=1"],
                                 stdin=subprocess.PIPE)
         for ic in ics:
-            for o in ic.objects.values():
-                proc.stdin.write("%s\n" % o.sha1)
+            for s in ic.sha1s():
+                proc.stdin.write("%s\n" % s)
         proc.stdin.close()
         proc.wait()
         if proc.returncode != 0:
@@ -611,7 +656,15 @@ if args.mess_up:
     mess_up(args.mess_up)
     exit()
 
+
 rep = git_rep()
+
+if args.dump_pack:
+    pk = packfile(args.dump_pack, rep)
+    pk.read_pack()
+    pk.dump_objects()
+    
+    exit()
 
 actions = {
     'repack': lambda: rep.simple_repack(args.size, dry_run = args.dry_run),
