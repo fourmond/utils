@@ -27,6 +27,8 @@ parser.add_argument("action", default=['dump-objects'], nargs='*',
                     help="action to be performed")
 parser.add_argument("-s", "--size", type=int,
                     help="size (MB)")
+parser.add_argument("--big-objects", type=int,
+                    help="size (kb)")
 parser.add_argument("--mess-up", type=int,
                     help="create a fake repository based on the files in the current directory with several operations")
 parser.add_argument("-n", "--dry-run",action="store_true",
@@ -40,6 +42,11 @@ if args.size:                   # in bytes !
     args.size *= 1024**2
 else:
     args.size = 10*1024**2
+
+if args.big_objects:                   # in bytes !
+    args.big_objects *= 1024
+else:
+    args.big_objects = 1*1024**2
 
 if args.repack_size:            
     args.repack_size *= 1024 # in KB, compared to count_objects
@@ -147,6 +154,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
     def dump_objects(self, full = False):
         st = {}
+        ics = []
         for pck in self.list_packs():
             print "Reading pack %s" % pck.pack_file
             pck.read_pack()
@@ -158,10 +166,128 @@ with the packs they are found in. Assumes the packs are already read. Returns th
             if full:
                 for ic in pck.interconnected_objects.values():
                     print "   - %s " % ic.stats()
+                    ics.append(ic)
                     
         dups = self.cross_reference_objects()
         print "%d duplicate objects" % len(dups)
         print st
+
+        if full:
+            print "Hierarchies by size"
+            ics = sorted(ics, key=lambda a: a.stats()['packed_size'])
+            for ic in ics:
+                print "   - %s " % ic.stats()
+
+        # Now make stats about the hierarchies ?
+
+
+    def smart_repack(self, small_obj_size, pack_size,
+                     tolerance = 1.2, dry_run = True):
+        """This function repacks the whole repository sticking to those rules:
+          * packs should not be (much) larger than pack_size
+          * objects -- or, rather hierarchies --  smaller than small_obj_size
+            are packed together
+          * and, consequently, objects larger than small_obj_size are
+            packed together
+          * existing hierarchies are preserved
+          * packs adhering to the rules are left untouched
+          small_obj_size and pack_size are in bytes
+        """
+
+        # if not dry_run:
+        #     self.cheap_gc()
+        #     self.drop_redundant_packs()
+
+        
+        # First pass at the packs: we split packs into:
+        # * small packs
+        # * big packs
+        # * mixed/large packs (which NEED to be repacked)
+        # * done packs, that are either big or small but already with
+        #   the correct size
+        #
+        # IDEA for LARGE optimizations: use file names that reflect the
+        # small/big distinction, and LEAVE them alone if they are
+        # around the right size.
+        done_pks = []
+        redo_pks = []
+
+        small_pks = []
+        big_pks = []
+        small_ics = []
+        big_ics = []
+
+        # Hmmm, this is where one needs to be smart ?
+        for pk in self.list_packs():
+            pk.read_pack()
+            ics = sorted(pk.interconnected_objects.values(), key=lambda a: a.stats()['packed_size'])
+            if len(ics) == 0:
+                continue
+            
+            # Large packs, but made of only one object -> forget
+            if pk.size > pack_size * tolerance:
+                if len(ics) == 1:
+                    done_pks.append(pk)
+                    continue
+            if pk.size > pack_size and pk.size < pack_size * tolerance:
+                done_pks.append(pk)
+                continue
+
+            if (ics[0].stats()['packed_size'] < small_obj_size) and (ics[-1].stats()['packed_size'] > small_obj_size):
+                for ic in ics:
+                    if ic.stats()['packed_size'] < small_obj_size:
+                        small_ics.append(ic)
+                    else:
+                        big_ics.append(ic)
+                redo_pks.append(pk)
+                continue
+
+            # One size and large, we don't touch !
+            if (ics[0].stats()['packed_size'] < small_obj_size):
+                small_pks.append(pk)
+                small_ics.extend(ics)
+                redo_pks.append(pk)
+            else:
+                redo_pks.append(pk)
+                big_pks.append(pk)
+                big_ics.extend(ics)
+
+        for d in done_pks:
+            print "Not repacking %s, OK" % d.pack_file
+
+        # Sort small things into packs
+        small_pks = interconnected_objects.split_into_packs(small_ics, pack_size, tolerance)
+        big_pks = interconnected_objects.split_into_packs(big_ics, pack_size, tolerance)
+        if dry_run:
+            print "Small packs:"
+            i = 0
+            for pk in small_pks:
+                print "Pack #%d" % i
+                i += 1
+                for ic in pk:
+                    print "   - %s " % ic.stats()
+                    
+            print "Large packs:"
+            i = 0
+            for pk in big_pks:
+                print "Pack #%d" % i
+                i += 1
+                for ic in pk:
+                    print "   - %s " % ic.stats()
+
+        else:
+            for pk in small_pks:
+                packfile.pack_objects(pk, "small")
+            for pk in big_pks:
+                packfile.pack_objects(pk, "big")
+
+        for d in redo_pks:
+            print "Removing pack: %s" % d.pack_file
+            os.unlink(d.pack_file)
+
+                
+            
+            
         
 
 class packed_object:
@@ -243,7 +369,32 @@ terms of storage, i.e. objects that are deltas of a single root object"""
             st['packed_size'] += obj.packed_size
         return st
             
-        
+    @staticmethod
+    def split_into_packs(ics, pack_size, tolerance):
+        """Splits a list of ics into a list of list of ics,
+        each that should make a pack of size between pack_size
+        and pack_size*tolerance. This is probably going to fail.
+        Returns a hash expected-size -> [objects] ?"""
+
+        # A list of (expected_size, [ics])
+        pks = [ ]
+        for ic in ics:
+            sz = ic.stats()['packed_size']
+            fnd = False
+            for tpk in pks:
+                if tpk[0] > pack_size:
+                    continue
+                if tpk[0] + sz < pack_size * tolerance:
+                    tpk[0] += sz
+                    tpk[1].append(ic)
+                    fnd = True
+                    break
+                    # todo: remove from the list ?
+            if not fnd:
+                pks.append([sz, [ic]])
+        return map(lambda a: a[1], pks)
+            
+            
 
 class packfile:
     def __init__(self, pck, rep):
@@ -334,6 +485,23 @@ class packfile:
                 for pck in packs:
                     for o in pck.objects.values():
                         gpa.write("%s\n" % o.sha1)
+
+
+    @staticmethod
+    def pack_objects(ics, base):
+        """Packs the given object hierarchies into a pack with the given base name"""
+
+        proc = subprocess.Popen(['git','pack-objects',
+                                 '.git/objects/pack/%s' % base,
+                                 "--threads=1"],
+                                stdin=subprocess.PIPE)
+        for ic in ics:
+            for o in ic.objects.values():
+                proc.stdin.write("%s\n" % o.sha1)
+        proc.stdin.close()
+        proc.wait()
+        if proc.returncode != 0:
+            raise "Failed to pack objects"
 
 
     def split(self, size, tolerance = 0.2):
@@ -447,6 +615,7 @@ rep = git_rep()
 
 actions = {
     'repack': lambda: rep.simple_repack(args.size, dry_run = args.dry_run),
+    'smart-repack': lambda: rep.smart_repack(args.big_objects, args.size, 1.2, args.dry_run),
     'split': lambda: packfile.split_pack(args.action[1], args.size, rep),
     'dump-objects': rep.dump_objects,
     'dump-full': lambda: rep.dump_objects(True)
