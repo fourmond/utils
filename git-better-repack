@@ -222,6 +222,9 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         # Hmmm, this is where one needs to be smart ?
         for pk in self.list_packs():
             print "Reading pack %s " % pk.pack_file
+            if pk.dissect_path()[1] == "gbp-final-pack":
+                print "Ignoring %s, already marked as done before" % pk.pack_file
+                continue
             pk.read_pack()
             ics = sorted(pk.interconnected_objects.values(), key=lambda a: a.stats()['packed_size'])
             if len(ics) == 0:
@@ -258,6 +261,8 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
         for d in done_pks:
             print "Not repacking %s, OK" % d.pack_file
+            d.rename("gbp-final-pack")
+
 
         for d in redo_pks:
             print "Repacking  %s" % d.pack_file
@@ -428,9 +433,9 @@ class packfile:
         """Returns [dirname, base, sha1]"""
         dn = os.path.dirname(self.pack_file)
         bn = os.path.basename(self.pack_file)
-        b,c = bn.split("-")
-        sha1 = c.split(".")[0]
-        return [dn, b, sha1]
+        r = re.compile("(.*)-([a-f0-9]{40})\.([^.]+)")
+        m = r.match(bn)
+        return [dn, m.group(1), m.group(2)]
 
     def files(self):
         d, b, s = self.dissect_path()
