@@ -53,7 +53,7 @@ else:
 if args.repack_size:            
     args.repack_size *= 1024 # in KB, compared to count_objects
 else:
-    args.repack_size = 10*1024
+    args.repack_size = 50*1024
 
 
 
@@ -184,7 +184,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
 
     def smart_repack(self, small_obj_size, pack_size,
-                     tolerance = 1.2, dry_run = True):
+                     tolerance = 1.2, dry_run = True, repack_size = 50*1024):
         """This function repacks the whole repository sticking to those rules:
           * packs should not be (much) larger than pack_size
           * objects -- or, rather hierarchies --  smaller than small_obj_size
@@ -196,11 +196,26 @@ with the packs they are found in. Assumes the packs are already read. Returns th
           small_obj_size and pack_size are in bytes
         """
 
-        # if not dry_run:
-        #     self.cheap_gc()
-        #     self.drop_redundant_packs()
+        # First, we need to decide whether or not we need to repack
+        # things
+        co = self.count_objects()
+        if co['size'] > repack_size:
+            self.cheap_gc()
 
+        # List all the packs and look for undersized or oversized packs
+        oversized = 0
+        undersized = 0
+        for pk in self.list_packs():
+            if pk.size < pack_size:
+                undersized += 1
+            if pk.size > pack_size * tolerance:
+                oversized += 1
+
+        if oversized == 0 and undersized <= 2:
+            print "Nothing to do"
+            return
         
+
         # First pass at the packs: we split packs into:
         # * small packs
         # * big packs
@@ -219,6 +234,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         small_ics = []
         big_ics = []
 
+
         # Hmmm, this is where one needs to be smart ?
         for pk in self.list_packs():
             print "Reading pack %s " % pk.pack_file
@@ -226,6 +242,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 print "Ignoring %s, already marked as done before" % pk.pack_file
                 continue
             pk.read_pack()
+            print " -> %s" % pk.describe()
             ics = sorted(pk.interconnected_objects.values(), key=lambda a: a.stats()['packed_size'])
             if len(ics) == 0:
                 print " -> Empty pack ?"
@@ -263,9 +280,14 @@ with the packs they are found in. Assumes the packs are already read. Returns th
             print "Not repacking %s, OK" % d.pack_file
             d.rename("gbp-final-pack")
 
+        if (len(small_pks) < 2) and (len(big_pks) < 2) and (len(redo_pks) - len(small_pks) - len(big_pks) == 0) :
+            print "Only lone packs left to repack, not repacking"
+            return 
 
+
+        print "Need to repack: "
         for d in redo_pks:
-            print "Repacking  %s" % d.pack_file
+            print " - %s" % d.pack_file
 
         # Sort small things into packs
         small_pks = interconnected_objects.split_into_packs(small_ics, pack_size, tolerance)
@@ -293,9 +315,11 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 pk.rename("backup")
             
             for pk in small_pks:
-                packfile.pack_objects(pk, "small")
+                print "\nPacking %d hierarchies" % len(pk)
+                packfile.pack_objects(self, pk, "small")
             for pk in big_pks:
-                packfile.pack_objects(pk, "big")
+                print "\nPacking %d hierarchies" % len(pk)
+                packfile.pack_objects(self, pk, "big")
 
         for d in redo_pks:
             print "Removing pack: %s" % d.pack_file
@@ -523,6 +547,11 @@ class packfile:
             st['packed_size'] += obj.packed_size
         return st
 
+    def describe(self):
+        """Returns a simple string to describe the pack"""
+        st = self.stats()
+        return "%d objects, %d ics, %d MB total, %d MB packed" % (st["objects"], st["interconnected_hierarchies"], st["object_size"] / (1024**2), st["packed_size"] / (1024**2))
+
     @staticmethod
     def repack(packs, dry_run=False):
         """Repacks the given packs"""
@@ -538,11 +567,11 @@ class packfile:
 
 
     @staticmethod
-    def pack_objects(ics, base):
+    def pack_objects(rep, ics, base):
         """Packs the given object hierarchies into a pack with the given base name"""
 
         proc = subprocess.Popen(['git','pack-objects',
-                                 '.git/objects/pack/%s' % base,
+                                 '%s/pack/%s' % (rep.obj_dir, base),
                                  "--threads=1"],
                                 stdin=subprocess.PIPE)
         for ic in ics:
@@ -673,7 +702,7 @@ if args.dump_pack:
 
 actions = {
     'repack': lambda: rep.simple_repack(args.size, dry_run = args.dry_run),
-    'smart-repack': lambda: rep.smart_repack(args.big_objects, args.size, 1.2, args.dry_run),
+    'smart-repack': lambda: rep.smart_repack(args.big_objects, args.size, 1.2, args.dry_run, args.repack_size),
     'split': lambda: packfile.split_pack(args.action[1], args.size, rep),
     'dump-objects': rep.dump_objects,
     'dump-full': lambda: rep.dump_objects(True)
