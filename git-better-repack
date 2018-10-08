@@ -20,7 +20,7 @@ import shutil
 import subprocess
 
 # For categorizing files.
-import magic
+# import magic
 
 parser = argparse.ArgumentParser()
 parser.add_argument("action", default=['dump-objects'], nargs='*',
@@ -200,6 +200,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         # things
         co = self.count_objects()
         if co['size'] > repack_size:
+            print "Packing loose objects"
             self.cheap_gc()
 
         # List all the packs and look for undersized or oversized packs
@@ -234,15 +235,19 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         small_ics = []
         big_ics = []
 
+        read_size = 0
+
 
         # Hmmm, this is where one needs to be smart ?
         for pk in self.list_packs():
-            print "Reading pack %s " % pk.pack_file
+            print "Reading %d MB pack %s " % (pk.size / (1024**2), pk.pack_file)
             if pk.dissect_path()[1] == "gbp-final-pack":
                 print "Ignoring %s, already marked as done before" % pk.pack_file
                 continue
             pk.read_pack()
             print " -> %s" % pk.describe()
+            read_size += pk.size
+            print " -> %.2f GB read so far" % (read_size/((1024.0**3)))
             ics = sorted(pk.interconnected_objects.values(), key=lambda a: a.stats()['packed_size'])
             if len(ics) == 0:
                 print " -> Empty pack ?"
