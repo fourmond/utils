@@ -203,6 +203,9 @@ with the packs they are found in. Assumes the packs are already read. Returns th
             print "Packing loose objects"
             self.cheap_gc()
 
+        d = os.statvfs(self.obj_dir)
+        available = d.f_bfree*d.f_bsize
+
         # List all the packs and look for undersized or oversized packs
         oversized = 0
         undersized = 0
@@ -237,6 +240,8 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
         read_size = 0
 
+        repack_size = 0
+
 
         # Hmmm, this is where one needs to be smart ?
         for pk in self.list_packs():
@@ -244,6 +249,10 @@ with the packs they are found in. Assumes the packs are already read. Returns th
             if pk.dissect_path()[1] == "gbp-final-pack":
                 print "Ignoring %s, already marked as done before" % pk.pack_file
                 continue
+            if (pk.size > pack_size * tolerance) and (repack_size + pk.size)*tolerance > available:
+                print "Skipping %s because there is not enough disk space available to repack it"
+                continue
+            
             pk.read_pack()
             print " -> %s" % pk.describe()
             read_size += pk.size
@@ -261,6 +270,11 @@ with the packs they are found in. Assumes the packs are already read. Returns th
             if pk.size > pack_size and pk.size < pack_size * tolerance:
                 done_pks.append(pk)
                 continue
+            if (repack_size + pk.size)*tolerance > available:
+                print "Skipping %s because there is not enough disk space available to repack it"
+                continue
+            repack_size += pk.size
+                
 
             if (ics[0].stats()['packed_size'] < small_obj_size) and (ics[-1].stats()['packed_size'] > small_obj_size):
                 for ic in ics:
