@@ -1,0 +1,87 @@
+#!/usr/bin/ruby
+
+# Copyright 2020 by Vincent Fourmond
+# This program is free software. It is distributed under the terms of the
+# GNU General Public License version 3.0 or later, found at
+# https://www.gnu.org/copyleft/gpl.html
+#
+# There is NO WARRANTY.
+
+# The idea behind this program is to parse a Runtastic export and
+# derive some stats. This is geared towards my own use of runtastic,
+# i.e. bicycle as transportation and not as sport.
+
+require 'json'
+require 'optparse'
+
+$cmd = :print
+
+opts = OptionParser.new do |opts|
+  opts.on("--distance", "Distance data") do |v|
+    $cmd = :distance
+  end
+end
+
+opts.parse! ARGV
+
+
+# Parses a session file and its GPS data, and returns a hash with the
+# contents of the JSON of the file, and in addition the GPS
+# coordinates for the starding and ending position.
+def parse_session(file)
+  js = JSON.parse(File.read(file))
+  # then, convert:
+  for k in %w(start_time end_time created_at updated_at)
+    js[k] = Time.at(js[k]*0.001)
+  end
+    
+
+  dir = File::dirname(file)
+
+  # Open the GPS data
+  gf = "#{dir}/GPS-data/#{js['id']}.json"
+  gps = JSON.parse(File.read(gf))
+
+  js['start_pos'] = {
+    'lat' => gps.first["latitude"],
+    'long' => gps.first["longitude"]
+  }
+  js['end_pos'] = {
+    'lat' => gps.last["latitude"],
+    'long' => gps.last["longitude"]
+  }
+  return js
+end
+
+Earth_Rad = 6.371e6
+ED = Earth_Rad * Math::PI/180
+# Returns the real distance, valid only for short angles of course.
+def distance(p1, p2)
+  dx = ED * (p1['lat']-p2['lat'])
+  dy = ED * Math::cos(Math::PI*p1['lat']/180)*(p1['long']-p2['long'])
+  return (dx**2 + dy**2)**0.5
+end
+
+
+sessions = []
+
+for f in ARGV
+  begin 
+    sessions << parse_session(f)
+  rescue
+  end
+end
+
+case $cmd
+when :print
+  # OK, sessions parsed:
+  for sess in sessions
+    puts "Session at #{sess['start_time']}:"
+    puts " * distance: #{sess['distance']*1e-3}"
+    puts " * end-start: #{distance(sess['start_pos'], sess['end_pos'])*1e-3}"
+  end
+when :distance
+  for sess in sessions
+    puts "#{distance(sess['start_pos'], sess['end_pos'])}\t#{sess['distance']}"
+  end
+end
