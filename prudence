@@ -10,7 +10,54 @@
 # Prudence is an attempt to organize my backups that are delocalized
 # across many places.
 
-class host:
+import argparse
+import os
+import os.path
+
+class prudence(object):
+    """The main class"""
+
+    instance = None
+    
+    def __init__(self):
+        self.conffile = os.environ['HOME'] + "/.prudence"
+        self.sources = []
+        self.stores = []
+        if prudence.instance is None:
+            prudence.instance = self
+
+
+    def parse_config(self):
+        code = open(self.conffile).read()
+        context = dict()
+        context["p"] = self
+        exec code in context
+
+    def run(self):
+        self.parse_config()
+
+        # Now running the backups
+        for s in self.sources:
+            for st in self.stores:
+                s.sync_to(st)
+
+    def launch(self, command):
+        print command
+
+    @staticmethod
+    def system(command):
+        prudence.instance.launch(command)
+        
+
+    def store(self, hst, dirname, git_sub = "git", rsync_sub = "rsync"):
+        """Used from the config file to add one store"""
+        self.stores.append(store(hst, dirname, git_sub, rsync_sub))
+
+    def git(self, host, path):
+        """Used in the config file to add a git source"""
+        self.sources.append(git_source(host, path))
+
+class host(object):
     """This class represents a host"""
     def __init__(self, name):
         self.name = name
@@ -18,16 +65,42 @@ class host:
     def is_current_host(self):
         """Returns true if the host is the computer prudence is running from"""
 
+    def __str__(self):
+        return self.name
 
-class source:
+class store(object):
+    """A place that can receive data"""
+
+    def __init__(self, hst, dirname, git_sub = "git", rsync_sub = "rsync"):
+        """Designates a storage place at the given host and directory"""
+        self.host = host(hst)
+        self.dirname = dirname
+        self.git = git_sub
+        self.rsync = rsync_sub
+
+    def only_remote(self):
+        """Returns true if the store is only remote, that is no instance of prudence will ever run on that host to keep it up-to-date"""
+
+    def available_space(self):
+        """Returns the available space in the given storage"""
+
+    def git_dir(self):
+        """Returns the directory where one can store git repositories"""
+        return "%s/%s" % (self.dirname, self.git)
+        
+    def rsync_dir(self):
+        """Returns the directory where one can store rsync backups"""
+
+class source(object):
     """This is the base class for all kinds of sources of data"""
 
-    def __init__(self, host, name):
-        self.host = host(host)
+    def __init__(self, hst, name):
+        self.host = host(hst)
         self.name = name
 
     def can_sync_to(self, store):
         """Returns true if the source can be sync'ed (saved) to the target store"""
+        return True             # for now
 
     def sync_to(self, store):
         """Does the actual synchronization"""
@@ -41,12 +114,43 @@ class source:
     def size_in(self, store):
         """Returns the storage size in the given store"""
 
+class git_source(source):
+    def __init__(self, host, path):
+        super(git_source, self).__init__(host, os.path.basename(path))
+        self.path = path
+        self.final_name = self.name
+        if not self.final_name.endswith(".git"):
+            self.final_name += ".git"
 
-class store:
-    """A place that can receive data"""
 
-    def only_remote(self):
-        """Returns true if the store is only remote, that is no instance of prudence will ever run on that host to keep it up-to-date"""
+    def loc(self):
+        return "%s:%s" % (self.host, self.path)
 
-    def available_space(self):
-        """Returns the available space in the given storage"""
+    def sync_to(self, store):
+        """Does the actual synchronization"""
+        target = "%s/%s" % (store.git_dir(), self.final_name)
+        if not os.path.exists(target):
+            os.makedirs(target)
+
+        owd = os.getcwd()
+        os.chdir(store.git_dir())
+        # check if the objects directory is present or not ?
+        if not os.path.exists(self.final_name + "/objects"):
+            # Cloning
+            cmd = ('git',
+                   'clone',
+                   '-c', 'pack.threads=1',
+                   '-c', 'pack.packSizeLimit=2G',
+                   '-c', 'core.bigfilethreshold=50m',
+                   '--bare', self.loc(), self.final_name)
+            prudence.system(cmd)
+        else:
+            pass
+
+
+        os.chdir(owd)
+
+
+p = prudence()
+
+p.run()
