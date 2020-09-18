@@ -1,0 +1,52 @@
+#! /usr/bin/python
+
+# Copyright 2020 by Vincent Fourmond
+# This program is free software. It is distributed under the terms of the
+# GNU General Public License version 3.0 or later, found at
+# https://www.gnu.org/copyleft/gpl.html
+#
+# There is NO WARRANTY.
+
+# Prudence is an attempt to organize my backups that are delocalized
+# across many places.
+
+class host:
+    """This class represents a host"""
+    def __init__(self, name):
+        self.name = name
+
+    def is_current_host(self):
+        """Returns true if the host is the computer prudence is running from"""
+
+
+class source:
+    """This is the base class for all kinds of sources of data"""
+
+    def __init__(self, host, name):
+        self.host = host(host)
+        self.name = name
+
+    def can_sync_to(self, store):
+        """Returns true if the source can be sync'ed (saved) to the target store"""
+
+    def sync_to(self, store):
+        """Does the actual synchronization"""
+
+    def status_in(self, store):
+        """Gives the status of this data source in the given store"""
+
+    def approximative_size(self):
+        """Returns the size in KiB. Should be cached"""
+
+    def size_in(self, store):
+        """Returns the storage size in the given store"""
+
+
+class store:
+    """A place that can receive data"""
+
+    def only_remote(self):
+        """Returns true if the store is only remote, that is no instance of prudence will ever run on that host to keep it up-to-date"""
+
+    def available_space(self):
+        """Returns the available space in the given storage"""
