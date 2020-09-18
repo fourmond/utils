@@ -20,6 +20,12 @@ opts = OptionParser.new do |opts|
   opts.on("--distance", "Distance data") do |v|
     $cmd = :distance
   end
+  opts.on("-c", "--classify", "Classify") do |v|
+    $cmd = :classify
+  end
+  opts.on("-C", "--classify-stats", "Classify stats") do |v|
+    $cmd = :classify_stats
+  end
 end
 
 opts.parse! ARGV
@@ -39,17 +45,18 @@ def parse_session(file)
   dir = File::dirname(file)
 
   # Open the GPS data
-  gf = "#{dir}/GPS-data/#{js['id']}.json"
-  gps = JSON.parse(File.read(gf))
+  # Very naive parsing of the XML file:
+  positions = []
+  File::open("#{dir}/GPS-data/#{js['id']}.gpx") do |f|
+    for l in f
+      if l =~ /lat="(.*)"\s*lon="(.*)"/
+        positions << {'lat' => $1.to_f, 'lon' => $2.to_f }
+      end
+    end
+  end
 
-  js['start_pos'] = {
-    'lat' => gps.first["latitude"],
-    'long' => gps.first["longitude"]
-  }
-  js['end_pos'] = {
-    'lat' => gps.last["latitude"],
-    'long' => gps.last["longitude"]
-  }
+  js['start_pos'] = positions.first
+  js['end_pos'] = positions.last
   return js
 end
 
@@ -58,10 +65,77 @@ ED = Earth_Rad * Math::PI/180
 # Returns the real distance, valid only for short angles of course.
 def distance(p1, p2)
   dx = ED * (p1['lat']-p2['lat'])
-  dy = ED * Math::cos(Math::PI*p1['lat']/180)*(p1['long']-p2['long'])
+  dy = ED * Math::cos(Math::PI*p1['lat']/180)*(p1['lon']-p2['lon'])
   return (dx**2 + dy**2)**0.5
 end
 
+def print_sess(sess, pre = "")
+  puts "#{pre}Session at #{sess['start_time']}:"
+  puts "#{pre} * time: #{sess['end_time']-sess['start_time']}"
+  puts "#{pre} * distance: #{sess['distance']*1e-3}"
+end
+
+# A cluster is defined by the average starting position and ending
+# position and average distance.
+#
+# Structure: hash with the given elements
+# * start_pos
+# * end_pos
+# * distance
+# * elements
+#
+# This works even on an empty hash
+def add_to_cluster(cluster, sess)
+  els = cluster['elements'] || []
+  cluster['distance'] = 0
+  cluster['start_pos'] = {'lat' => 0, 'lon' => 0 }
+  cluster['end_pos'] = {'lat' => 0, 'lon' => 0 }
+  els << sess
+  for el in els
+    cluster['distance'] += el['distance']/els.size
+    for pos in %w(start_pos end_pos)
+      for w in %w(lat lon)
+        cluster[pos][w] += el[pos][w]/els.size
+      end
+    end
+  end
+
+  cluster['elements'] = els
+end
+
+def belongs_to_cluster(cluster, sess, tol)
+  if (sess['distance'] - cluster['distance']).abs > tol
+    return false
+  end
+  for pos in %w(start_pos end_pos)
+    if distance(cluster[pos], sess[pos]) > tol
+      return false
+    end
+  end
+  return true
+end
+
+# Classifies the sessions by find sessions that start and end within
+# tolerance, and whose distance also differs by tolerance
+def classify_sessions(sessions, tol = 2e2)
+  clusters = []
+  for s in sessions
+    fnd = false
+    for c in clusters
+      if belongs_to_cluster(c, s, tol)
+        add_to_cluster(c, s)
+        fnd = true
+        break
+      end
+    end
+    if !fnd
+      c = {}
+      add_to_cluster(c, s)
+      clusters << c
+    end
+  end
+  return clusters
+end
 
 sessions = []
 
@@ -75,13 +149,29 @@ end
 case $cmd
 when :print
   # OK, sessions parsed:
-  for sess in sessions
-    puts "Session at #{sess['start_time']}:"
-    puts " * distance: #{sess['distance']*1e-3}"
-    puts " * end-start: #{distance(sess['start_pos'], sess['end_pos'])*1e-3}"
+  for sess in sessions.sort { |a,b| a['start_time'] <=> b["start_time"]}
+    print_sess(sess)
   end
 when :distance
   for sess in sessions
     puts "#{distance(sess['start_pos'], sess['end_pos'])}\t#{sess['distance']}"
+  end
+when :classify
+  clusters = classify_sessions(sessions)
+  puts "Found: #{clusters.size} clusters"
+  for c in clusters.sort { |a,b| a['elements'].size <=> b['elements'].size }
+    puts "Cluster: #{c['elements'].size} elements, average distance #{c['distance']}"
+    puts " - representative element: #{c['elements'].first['id']}"
+    for s in c['elements'].sort { |a,b| a['start_time'] <=> b["start_time"]}
+      print_sess(s, "  ")
+    end
+  end
+when :classify_stats
+  clusters = classify_sessions(sessions)
+  for c in clusters.sort { |a,b| a['elements'].size <=> b['elements'].size }
+    puts "\n## cluster"
+    for s in c['elements'].sort { |a,b| a['start_time'] <=> b["start_time"]}
+      puts "#{s['start_time'].strftime "%Y.%m.%d"}\t#{s['duration']*1e-3}\t#{s['distance']}"
+    end
   end
 end
