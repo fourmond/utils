@@ -137,7 +137,11 @@ class store(object):
         """Returns the directory where one can store rsync backups"""
 
     def dump(self):
-        local = "local" if self.host.is_local() else "remote"
+        local = "local" if self.is_local() else "remote"
+        if self.is_local():
+            stat = os.statvfs(self.dirname)
+            sz = (stat.f_frsize * stat.f_bavail)/(1024*1024)
+            local = "%s -- %d MB available" % (local, sz)
         return "%s:%s (%s)" % (self.host, self.dirname, local)
 
     def is_local(self):
