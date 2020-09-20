@@ -13,6 +13,8 @@
 import argparse
 import os
 import os.path
+import socket
+import subprocess
 
 class prudence(object):
     """The main class"""
@@ -23,6 +25,7 @@ class prudence(object):
         self.conffile = os.environ['HOME'] + "/.prudence"
         self.sources = []
         self.stores = []
+        self.dry_run = False
         if prudence.instance is None:
             prudence.instance = self
 
@@ -33,16 +36,51 @@ class prudence(object):
         context["p"] = self
         exec code in context
 
-    def run(self):
-        self.parse_config()
-
-        # Now running the backups
+    def run_backup(self):
+        """Runs the actual backup job"""
         for s in self.sources:
             for st in self.stores:
-                s.sync_to(st)
+                # Only save to local stores ?
+                if st.is_local():
+                    s.sync_to(st)
+
+    def dump_config(self):
+        """Dumps the configuration to standard output"""
+        print "Sources:"
+        for s in self.sources:
+            print " * %s" % s.dump()
+        print "\nStorage places:"
+        for st in self.stores:
+            print " * %s" % st.dump()
+
+
+    def run(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-D", "--dump-config",action="store_true",
+                            help="dumps the configuration")
+        parser.add_argument("-N", "--dry-run",action="store_true",
+                            help="only shows the command-lines instead of running them")
+        parser.add_argument("-c", "--conffile", type=str,
+                            help="alternate location of the configuration file")
+        args = parser.parse_args()
+        if args.conffile:
+            self.conffile = args.conffile
+        cmd = self.run_backup
+        if args.dump_config:
+            cmd = self.dump_config
+        if args.dry_run:
+            self.dry_run = True
+
+        self.parse_config()
+        cmd()
+
 
     def launch(self, command):
-        print command
+        if self.dry_run:
+            print command
+        else:
+            subprocess.call(command)
+        
 
     @staticmethod
     def system(command):
@@ -62,8 +100,15 @@ class host(object):
     def __init__(self, name):
         self.name = name
 
-    def is_current_host(self):
+    @staticmethod
+    def host_name():
+        """Returns the host name part of the current host"""
+        return socket.gethostname().split(".")[0]
+
+    def is_local(self):
         """Returns true if the host is the computer prudence is running from"""
+        return host.host_name() == self.name
+        
 
     def __str__(self):
         return self.name
@@ -91,6 +136,13 @@ class store(object):
     def rsync_dir(self):
         """Returns the directory where one can store rsync backups"""
 
+    def dump(self):
+        local = "local" if self.host.is_local() else "remote"
+        return "%s:%s (%s)" % (self.host, self.dirname, local)
+
+    def is_local(self):
+        return self.host.is_local()
+
 class source(object):
     """This is the base class for all kinds of sources of data"""
 
@@ -113,6 +165,9 @@ class source(object):
 
     def size_in(self, store):
         """Returns the storage size in the given store"""
+
+    def dump(self):
+        """Returns a string describing the source"""
 
 class git_source(source):
     def __init__(self, host, path):
@@ -145,10 +200,17 @@ class git_source(source):
                    '--bare', self.loc(), self.final_name)
             prudence.system(cmd)
         else:
-            pass
-
-
+            os.chdir(self.final_name)
+            cmd = ('git', 'fetch',
+                   '--verbose',
+                   'origin',
+                   '+refs/heads/*:refs/heads/*')
+            prudence.system(cmd)
         os.chdir(owd)
+
+    def dump(self):
+        local = "local" if self.host.is_local() else "remote"
+        return "git: %s (%s)" % (self.loc(), local)
 
 
 p = prudence()
