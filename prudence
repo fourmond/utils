@@ -26,6 +26,7 @@ class prudence(object):
         self.sources = []
         self.stores = []
         self.dry_run = False
+        self.verbose = False
         if prudence.instance is None:
             prudence.instance = self
 
@@ -39,9 +40,11 @@ class prudence(object):
     def run_backup(self):
         """Runs the actual backup job"""
         for s in self.sources:
+            print "\nBacking up: %s" % s.loc()
             for st in self.stores:
                 # Only save to local stores ?
                 if st.is_local():
+                    print " -> to %s " % st.dirname
                     s.sync_to(st)
 
     def dump_config(self):
@@ -76,9 +79,11 @@ class prudence(object):
 
 
     def launch(self, command):
-        if self.dry_run:
-            print command
-        else:
+        s = " ".join(command)
+        if self.verbose or self.dry_run:
+            print "Running %s" % s
+            print " -> current dir: %s" % (os.getcwd())
+        if not self.dry_run:
             subprocess.call(command)
         
 
@@ -87,12 +92,22 @@ class prudence(object):
         prudence.instance.launch(command)
         
 
-    def store(self, hst, dirname, git_sub = "git", rsync_sub = "rsync"):
+    def store(self, spec, git_sub = "git", rsync_sub = "rsync"):
         """Used from the config file to add one store"""
-        self.stores.append(store(hst, dirname, git_sub, rsync_sub))
+        idx = spec.index(':')
+        if idx < 0:
+            raise "Now host spec here"
+        host = spec[0:idx]
+        path = spec[idx+1:]
+        self.stores.append(store(host, path, git_sub, rsync_sub))
 
-    def git(self, host, path):
+    def git(self, spec):
         """Used in the config file to add a git source"""
+        idx = spec.index(':')
+        if idx < 0:
+            raise "Now host spec here"
+        host = spec[0:idx]
+        path = spec[idx+1:]
         self.sources.append(git_source(host, path))
 
 class host(object):
@@ -183,7 +198,10 @@ class git_source(source):
 
 
     def loc(self):
-        return "%s:%s" % (self.host, self.path)
+        if self.host.is_local():
+            return self.path
+        else:
+            return "%s:%s" % (self.host, self.path)
 
     def sync_to(self, store):
         """Does the actual synchronization"""
@@ -207,7 +225,7 @@ class git_source(source):
             os.chdir(self.final_name)
             cmd = ('git', 'fetch',
                    '--verbose',
-                   'origin',
+                   self.loc(),
                    '+refs/heads/*:refs/heads/*')
             prudence.system(cmd)
         os.chdir(owd)
