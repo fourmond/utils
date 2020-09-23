@@ -12,9 +12,11 @@
 
 import argparse
 import os
+import sys
 import os.path
 import socket
 import subprocess
+import re
 
 class prudence(object):
     """The main class"""
@@ -47,6 +49,16 @@ class prudence(object):
                     print " -> to %s " % st.dirname
                     s.sync_to(st)
 
+    def print_status(self):
+        """Prints the status of the saves"""
+        for s in self.sources:
+            print "\nLooking at source: %s" % s.loc()
+            sys.stdout.flush()
+            for st in self.stores:
+                # Only save to local stores ?
+                if st.is_local():
+                    s.status_in(st)
+
     def dump_config(self):
         """Dumps the configuration to standard output"""
         print "Sources:"
@@ -61,6 +73,8 @@ class prudence(object):
         parser = argparse.ArgumentParser()
         parser.add_argument("-D", "--dump-config",action="store_true",
                             help="dumps the configuration")
+        parser.add_argument("-s", "--status",action="store_true",
+                            help="shows the status of the saves")
         parser.add_argument("-N", "--dry-run",action="store_true",
                             help="only shows the command-lines instead of running them")
         parser.add_argument("-c", "--conffile", type=str,
@@ -71,6 +85,8 @@ class prudence(object):
         cmd = self.run_backup
         if args.dump_config:
             cmd = self.dump_config
+        if args.status:
+            cmd = self.print_status
         if args.dry_run:
             self.dry_run = True
 
@@ -177,7 +193,7 @@ class source(object):
         """Does the actual synchronization"""
 
     def status_in(self, store):
-        """Gives the status of this data source in the given store"""
+        """Prints the status of this data source in the given store"""
 
     def approximative_size(self):
         """Returns the size in KiB. Should be cached"""
@@ -233,6 +249,24 @@ class git_source(source):
     def dump(self):
         local = "local" if self.host.is_local() else "remote"
         return "git: %s (%s)" % (self.loc(), local)
+
+    def status_in(self, store):
+        owd = os.getcwd()
+        os.chdir(store.git_dir())
+        print "Status in %s" % store.git_dir()
+        sys.stdout.flush()
+        prudence.system( ("du", "-s", "-h", self.final_name) )
+        os.chdir(self.final_name)
+        branches = re.split('\s+', subprocess.check_output(('git', 'branch')))
+        for b in branches:
+            if not (b == "" or b == "*"):
+                cmd = ('git',
+                       'show',
+                       '--pretty=format:\t%s:\t%%h %%ci\n' % b,
+                       '-s',
+                       b)
+                prudence.system( cmd )
+        os.chdir(owd)
 
 
 p = prudence()
