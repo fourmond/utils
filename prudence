@@ -1,4 +1,4 @@
-#! /usr/bin/python
+#! /usr/bin/python3
 
 # Copyright 2020 by Vincent Fourmond
 # This program is free software. It is distributed under the terms of the
@@ -37,22 +37,27 @@ class prudence(object):
         code = open(self.conffile).read()
         context = dict()
         context["p"] = self
-        exec code in context
+        exec(code,context)
 
     def run_backup(self):
         """Runs the actual backup job"""
+        failed = []
         for s in self.sources:
-            print "\nBacking up: %s" % s.loc()
+            print("\nBacking up: %s" % s.loc())
             for st in self.stores:
                 # Only save to local stores ?
                 if st.is_local():
-                    print " -> to %s " % st.dirname
-                    s.sync_to(st)
+                    print(" -> to %s " % st.dirname)
+                    if not s.sync_to(st):
+                        print(" -> FAILED")
+                        failed.append("%s -> %s" % (s.loc(), st.dirname))
+        if(len(failed) > 0):
+            print("Failed syncs: %s" % (", ".join(failed)))
 
     def print_status(self):
         """Prints the status of the saves"""
         for s in self.sources:
-            print "\nLooking at source: %s" % s.loc()
+            print("\nLooking at source: %s" % s.loc())
             sys.stdout.flush()
             for st in self.stores:
                 # Only save to local stores ?
@@ -61,12 +66,12 @@ class prudence(object):
 
     def dump_config(self):
         """Dumps the configuration to standard output"""
-        print "Sources:"
+        print("Sources:")
         for s in self.sources:
-            print " * %s" % s.dump()
-        print "\nStorage places:"
+            print(" * %s" % s.dump())
+        print("\nStorage places:")
         for st in self.stores:
-            print " * %s" % st.dump()
+            print(" * %s" % st.dump())
 
 
     def run(self):
@@ -97,8 +102,8 @@ class prudence(object):
     def launch(self, command):
         s = " ".join(command)
         if self.verbose or self.dry_run:
-            print "Running %s" % s
-            print " -> current dir: %s" % (os.getcwd())
+            print("Running %s" % s)
+            print(" -> current dir: %s" % (os.getcwd()))
         if not self.dry_run:
             subprocess.call(command)
         
@@ -220,7 +225,7 @@ class git_source(source):
             return "%s:%s" % (self.host, self.path)
 
     def sync_to(self, store):
-        """Does the actual synchronization"""
+        """Does the actual synchronization. Returns false if the synchronisation failed somehow"""
         target = "%s/%s" % (store.git_dir(), self.final_name)
         if not os.path.exists(target):
             os.makedirs(target)
@@ -228,23 +233,28 @@ class git_source(source):
         owd = os.getcwd()
         os.chdir(store.git_dir())
         # check if the objects directory is present or not ?
-        if not os.path.exists(self.final_name + "/objects"):
-            # Cloning
-            cmd = ('git',
-                   'clone',
-                   '-c', 'pack.threads=1',
-                   '-c', 'pack.packSizeLimit=2G',
-                   '-c', 'core.bigfilethreshold=50m',
-                   '--bare', self.loc(), self.final_name)
-            prudence.system(cmd)
-        else:
-            os.chdir(self.final_name)
-            cmd = ('git', 'fetch',
-                   '--verbose',
-                   self.loc(),
-                   '+refs/heads/*:refs/heads/*')
-            prudence.system(cmd)
+        rv = true
+        try:
+            if not os.path.exists(self.final_name + "/objects"):
+                # Cloning
+                cmd = ('git',
+                       'clone',
+                       '-c', 'pack.threads=1',
+                       '-c', 'pack.packSizeLimit=2G',
+                       '-c', 'core.bigfilethreshold=50m',
+                       '--bare', self.loc(), self.final_name)
+                prudence.system(cmd)
+            else:
+                os.chdir(self.final_name)
+                cmd = ('git', 'fetch',
+                       '--verbose',
+                       self.loc(),
+                       '+refs/heads/*:refs/heads/*')
+                prudence.system(cmd)
+        except subprocess.CalledProcessError:
+            rv = false
         os.chdir(owd)
+        return rv
 
     def dump(self):
         local = "local" if self.host.is_local() else "remote"
@@ -253,19 +263,22 @@ class git_source(source):
     def status_in(self, store):
         owd = os.getcwd()
         os.chdir(store.git_dir())
-        print "Status in %s" % store.git_dir()
+        print("Status in %s" % store.git_dir())
         sys.stdout.flush()
         prudence.system( ("du", "-s", "-h", self.final_name) )
         os.chdir(self.final_name)
-        branches = re.split('\s+', subprocess.check_output(('git', 'branch')))
-        for b in branches:
-            if not (b == "" or b == "*"):
-                cmd = ('git',
-                       'show',
-                       '--pretty=format:\t%s:\t%%h %%ci\n' % b,
-                       '-s',
-                       b)
-                prudence.system( cmd )
+        try:
+            branches = re.split('\s+', subprocess.check_output(('git', 'branch')).decode('utf-8'))
+            for b in branches:
+                if not (b == "" or b == "*"):
+                    cmd = ('git',
+                           'show',
+                           '--pretty=format:\t%s:\t%%h %%ci\n' % b,
+                           '-s',
+                           b)
+                    prudence.system( cmd )
+        except subprocess.CalledProcessError:
+            print(" -> failed to check status")
         os.chdir(owd)
 
 
