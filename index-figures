@@ -1,0 +1,127 @@
+#! /usr/bin/python3
+
+# Copyright 2021 by Vincent Fourmond
+# This program is free software. It is distributed under the terms of the
+# GNU General Public License version 3.0 or later, found at
+# https://www.gnu.org/copyleft/gpl.html
+#
+# There is NO WARRANTY.
+
+# index-figures is a tentative to index all my figures, which are
+# spread around many 
+
+import argparse
+import os
+import sys
+# import os.path
+import subprocess
+
+class figure(object):
+    """This class represents a single figure, consisting in a source file, an output file (usually PDF) and a target thumbnail. It provides means to regenerate the thumbnails, check if the output file or the thumbnail is up-to-date, and possibly regenerate the output file, if a Makefile is found in the source directory...
+"""
+    
+    def __init__(self, source, output, thumb):
+        self.source = source
+        self.output = output
+        self.thumb = thumb
+
+    def dump(self):
+        print("Figure: %s (%s) -> %s (%s) -- src: %s" % (self.output, self.output_ok(), self.thumb, self.thumb_ok(), self.source))
+
+    def fl_more_recent(self, fl):
+        """Internal function"""
+        if os.path.exists(fl):
+            stm = os.path.getmtime(self.source)
+            ttm = os.path.getmtime(fl)
+            return stm < ttm
+        else:
+            return False
+
+    def thumb_ok(self):
+        """Returns true if the thumbnail exists and is more recent than the source"""
+        return self.fl_more_recent(self.thumb)
+
+    def output_ok(self):
+        return self.fl_more_recent(self.output)
+
+    def make_thumb(self, w, h):
+        sz = "%dx%d" % (w, h)
+        subprocess.call(("convert", '-density', '200', self.output, "-resize", sz, self.thumb))
+
+        
+    
+
+class indexer(object):
+    """This class indexes the contents of a directory and its subdirectories"""
+
+    def __init__(self, directory):
+        self.base = directory
+        # Types is a correspondance source extension -> output extension
+        self.types = {
+            '.tikz': '.pdf',
+            '.qsf': '.pdf',
+            '.svg': '.pdf',
+            '.ct2': '.pdf'
+        }
+        # The list of sources
+        self.thumb_dir = "thumb-index"
+        self.figures = []
+
+
+    def find_figures(self):
+        """Finds all the figures in the directories"""
+        
+    def index(self):
+        """Runs the indexing process, find the files"""
+        for root, dirs, files in os.walk(self.base):
+            for f in files:
+                base, ext = os.path.splitext(f)
+                if ext in self.types:
+                    fn = os.path.join(root, f)
+                    tgt = "%s%s" % (os.path.join(root, base), self.types[ext])
+                    thumb_name = "%s-%s.png" % (base, root.replace("./","").replace("/", "-"))
+                    thmb = os.path.join(self.thumb_dir, thumb_name)
+                    fig = figure(fn, tgt, thmb)
+                    self.figures.append(fig)
+
+        self.ok_thumbs = []
+        self.ok_outs = []
+        for fig in self.figures:
+            if fig.thumb_ok():
+                self.ok_thumbs.append(fig)
+                continue
+            if fig.output_ok():
+                self.ok_outs.append(fig)
+                continue
+
+        print(("Found %d figures, %d up-to-date thumbnails and %d up-to-date output files") % (len(self.figures), len(self.ok_thumbs), len(self.ok_outs)))
+            
+                      
+    def make_thumbs(self):
+        """Once all the files are found, try to remake the thumbnails"""
+        if not os.path.exists(self.thumb_dir):
+            os.makedirs(self.thumb_dir)
+
+        for fig in self.ok_outs:
+            print("Regenerating thumbnail: %s" % (fig.thumb))
+            fig.make_thumb(600,600)
+
+
+    @staticmethod
+    def run():
+        parser = argparse.ArgumentParser()
+# parser.add_argument("-D", "--dump-config",action="store_true",
+#                             help="dumps the configuration")
+#         parser.add_argument("-s", "--status",action="store_true",
+#                             help="shows the status of the saves")
+#         parser.add_argument("-N", "--dry-run",action="store_true",
+#                             help="only shows the command-lines instead of running them")
+#         parser.add_argument("-c", "--conffile", type=str,
+#                             help="alternate location of the configuration file")
+        args = parser.parse_args()
+        idx = indexer(".")
+        idx.index()
+        idx.make_thumbs()
+
+
+indexer.run()
