@@ -233,7 +233,7 @@ class git_source(source):
         owd = os.getcwd()
         os.chdir(store.git_dir())
         # check if the objects directory is present or not ?
-        rv = true
+        rv = True
         try:
             if not os.path.exists(self.final_name + "/objects"):
                 # Cloning
@@ -252,7 +252,7 @@ class git_source(source):
                        '+refs/heads/*:refs/heads/*')
                 prudence.system(cmd)
         except subprocess.CalledProcessError:
-            rv = false
+            rv = False
         os.chdir(owd)
         return rv
 
