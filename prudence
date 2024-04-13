@@ -1,6 +1,6 @@
 #! /usr/bin/python3
 
-# Copyright 2020 by Vincent Fourmond
+# Copyright 2020, 2024 by Vincent Fourmond
 # This program is free software. It is distributed under the terms of the
 # GNU General Public License version 3.0 or later, found at
 # https://www.gnu.org/copyleft/gpl.html
@@ -8,7 +8,7 @@
 # There is NO WARRANTY.
 
 # Prudence is an attempt to organize my backups that are delocalized
-# across many places.
+# across many places, and all based on git
 
 import argparse
 import os
@@ -17,9 +17,34 @@ import os.path
 import socket
 import subprocess
 import re
+import json
 
-class prudence(object):
-    """The main class"""
+class prudence:
+    """The point of prudence is to distribute (git) backups across
+    as many hard drives as possible.
+
+    * the sources are assumed to be git repositories that are
+      available by pulling (all branches).
+
+    * each host has a number of backup directories (hopefully
+      distributed across different hard drives)
+
+    * the host pulls from the sources for one directory and
+      redistributes locally afterwards
+
+    * the host is able to give the status of the current saves, which includes:
+      - the free space in the mount point
+      - the space taken for the given source on the disk
+      - the last commit hash/commit date/commit message
+
+    * prudence is able to gather the status of other hosts (this will
+      be hard a bit I guess)
+
+    * the storage spaces of the host may be organized on removable
+      hard drives, identified via their UUID ? (to be mounted
+      manually). The status of the saves on the removable hard drives
+      should be saved somehow
+    """
 
     instance = None
     
@@ -29,40 +54,60 @@ class prudence(object):
         self.stores = []
         self.dry_run = False
         self.verbose = False
+        self.conf_parse = False
         if prudence.instance is None:
             prudence.instance = self
 
 
     def parse_config(self):
+        """Parses the configuration file, which is expected to contain
+        python code using 'p' as the prudence instance.
+
+        Only a
+        """
         code = open(self.conffile).read()
         context = dict()
         context["p"] = self
+        self.conf_parse = True
         exec(code,context)
+        self.conf_parse = False
 
     def run_backup(self):
         """Runs the actual backup job"""
-        failed = []
-        for s in self.sources:
-            print("\nBacking up: %s" % s.loc())
-            for st in self.stores:
-                # Only save to local stores ?
-                if st.is_local():
-                    print(" -> to %s " % st.dirname)
-                    if not s.sync_to(st):
-                        print(" -> FAILED")
-                        failed.append("%s -> %s" % (s.loc(), st.dirname))
-        if(len(failed) > 0):
-            print("Failed syncs: %s" % (", ".join(failed)))
+        if self.conf_parse:
+            raise "Cannot use while reading the configuration file"
+        # failed = []
+        # for s in self.sources:
+        #     print("\nBacking up: %s" % s.loc())
+        #     for st in self.stores:
+        #         # Only save to local stores ?
+        #         if st.is_local():
+        #             print(" -> to %s " % st.dirname)
+        #             if not s.sync_to(st):
+        #                 print(" -> FAILED")
+        #                 failed.append("%s -> %s" % (s.loc(), st.dirname))
+        # if(len(failed) > 0):
+        #     print("Failed syncs: %s" % (", ".join(failed)))
 
     def print_status(self):
         """Prints the status of the saves"""
+        print(store.mount_points())
+        print(json.dumps(self.get_status(), sort_keys=True, indent=2))
+
+    def get_status(self):
+        """Gets the whole status of the saves"""
+        rv = {}
+        rv['stores'] = {}
+        for s in self.stores:
+            rv['stores'][s.dirname] = s.get_status()
+        rv['sources'] = {}
         for s in self.sources:
-            print("\nLooking at source: %s" % s.loc())
-            sys.stdout.flush()
+            loc = s.loc()
+            rv['sources'][loc] = {}
             for st in self.stores:
-                # Only save to local stores ?
-                if st.is_local():
-                    s.status_in(st)
+                rv['sources'][loc][st.dirname] = s.get_status_in(st)
+        return rv
+        
 
     def dump_config(self):
         """Dumps the configuration to standard output"""
@@ -74,164 +119,159 @@ class prudence(object):
             print(" * %s" % st.dump())
 
 
-    def run(self):
-        parser = argparse.ArgumentParser()
-        parser.add_argument("-D", "--dump-config",action="store_true",
-                            help="dumps the configuration")
-        parser.add_argument("-s", "--status",action="store_true",
-                            help="shows the status of the saves")
-        parser.add_argument("-N", "--dry-run",action="store_true",
-                            help="only shows the command-lines instead of running them")
-        parser.add_argument("-c", "--conffile", type=str,
-                            help="alternate location of the configuration file")
-        args = parser.parse_args()
-        if args.conffile:
-            self.conffile = args.conffile
-        cmd = self.run_backup
-        if args.dump_config:
-            cmd = self.dump_config
-        if args.status:
-            cmd = self.print_status
-        if args.dry_run:
-            self.dry_run = True
-
-        self.parse_config()
-        cmd()
-
-
     def launch(self, command):
+        """Launches a given command (an array of text)"""
         s = " ".join(command)
         if self.verbose or self.dry_run:
             print("Running %s" % s)
             print(" -> current dir: %s" % (os.getcwd()))
         if not self.dry_run:
             subprocess.call(command)
-        
 
     @staticmethod
     def system(command):
         prudence.instance.launch(command)
-        
 
-    def store(self, spec, git_sub = "git", rsync_sub = "rsync"):
+    def store(self, spec, git_sub = "git"):
         """Used from the config file to add one store"""
-        idx = spec.index(':')
-        if idx < 0:
-            raise "Now host spec here"
-        host = spec[0:idx]
-        path = spec[idx+1:]
-        self.stores.append(store(host, path, git_sub, rsync_sub))
+        self.stores.append(store(spec, git_sub))
 
-    def git(self, spec):
+    def git(self, spec, fnl = None):
         """Used in the config file to add a git source"""
         idx = spec.index(':')
         if idx < 0:
             raise "Now host spec here"
         host = spec[0:idx]
         path = spec[idx+1:]
-        self.sources.append(git_source(host, path))
+        self.sources.append(git_source(host, path, fnl))
 
-class host(object):
-    """This class represents a host"""
-    def __init__(self, name):
-        self.name = name
 
-    @staticmethod
-    def host_name():
-        """Returns the host name part of the current host"""
-        return socket.gethostname().split(".")[0]
+class store:
+    """A local directory that contains the backups.
+    
+    An interesting possibility is also to allow for backups that are
+    local but mounted only occasionally, like backup hard drives.
 
-    def is_local(self):
-        """Returns true if the host is the computer prudence is running from"""
-        return host.host_name() == self.name
-        
+    Those would be identified by UUID ?
 
-    def __str__(self):
-        return self.name
+    """
 
-class store(object):
-    """A place that can receive data"""
-
-    def __init__(self, hst, dirname, git_sub = "git", rsync_sub = "rsync"):
-        """Designates a storage place at the given host and directory"""
-        self.host = host(hst)
+    def __init__(self, dirname, git_dir):
+        """Designates a (local) storage place"""
         self.dirname = dirname
-        self.git = git_sub
-        self.rsync = rsync_sub
-
-    def only_remote(self):
-        """Returns true if the store is only remote, that is no instance of prudence will ever run on that host to keep it up-to-date"""
+        self.git = git_dir
 
     def available_space(self):
-        """Returns the available space in the given storage"""
+        """Returns the available space in the given storage, in kB"""
+        try:
+            stat = os.statvfs(self.mount_point())
+            sz = (stat.f_frsize * stat.f_bavail)/1024
+            return int(sz)
+        except:
+            return -1
+
 
     def git_dir(self):
         """Returns the directory where one can store git repositories"""
         return "%s/%s" % (self.dirname, self.git)
         
-    def rsync_dir(self):
-        """Returns the directory where one can store rsync backups"""
 
     def dump(self):
-        local = "local" if self.is_local() else "remote"
-        if self.is_local():
-            stat = os.statvfs(self.dirname)
-            sz = (stat.f_frsize * stat.f_bavail)/(1024*1024)
-            local = "%s -- %d MB available" % (local, sz)
-        return "%s:%s (%s)" % (self.host, self.dirname, local)
+        stat = os.statvfs(self.dirname)
+        sz = (stat.f_frsize * stat.f_bavail)/(1024*1024)
+        local = " %d MB available" % sz
+        return "%s (%s -- %s)" % (self.dirname, local, self.mount_point())
 
-    def is_local(self):
-        return self.host.is_local()
+    def mount_point(self):
+        """Returns the mount point of the directory"""
+        path = self.dirname
+        while not os.path.ismount(path):
+            path = os.path.dirname(path)
+        return path
 
-class source(object):
-    """This is the base class for all kinds of sources of data"""
+    def get_status(self):
+        """Returns the status of the storage space"""
+        rv = {}
+        rv['directory'] = self.dirname
+        rv['used_space'] = store.directory_use(self.dirname)
+        rv['free_space'] = self.available_space()
+        rv['mount'] = self.mount_point()
+        rv['device'] = self.device()
+        return rv
 
-    def __init__(self, hst, name):
-        self.host = host(hst)
-        self.name = name
+    @staticmethod
+    def device_uuids():
+        """Returns all the devices and their UUID"""
+        # TODO
+        return None
 
-    def can_sync_to(self, store):
-        """Returns true if the source can be sync'ed (saved) to the target store"""
-        return True             # for now
+    @staticmethod
+    def mount_points():
+        """Returns mount points and the corresponding devices"""
+        try:
+            mnt = subprocess.check_output(('mount'),
+                                          text=True)
+            rv = {}
+            for m in re.finditer('^(\S+)\s+on\s+(\S+)', mnt, re.MULTILINE):
+                rv[m.group(2)] = m.group(1)
+            return rv
+        except:
+            return None
 
-    def sync_to(self, store):
-        """Does the actual synchronization"""
+    def device(self):
+        """Returns the device"""
+        mp = self.mount_point()
+        mps = store.mount_points()
+        if mps is not None:
+            return mps.get(mp, None)
+        return None
+        
 
-    def status_in(self, store):
-        """Prints the status of this data source in the given store"""
+    @staticmethod
+    def directory_use(directory):
+        """Returns the size in kB of the given directory.
+        For now implemented via a call to du.
+        Returns -1 is something went wrong"""
+        try:
+            val = subprocess.check_output( ("du", "-s", 
+                                            directory),
+                                           text=True).split("\t")[0]
+            return int(val)
+        except subprocess.CalledProcessError:
+            return -1
 
-    def approximative_size(self):
-        """Returns the size in KiB. Should be cached"""
+        
 
-    def size_in(self, store):
-        """Returns the storage size in the given store"""
+class git_source:
+    """This source describes a git source -- which are all sources anyway"""
 
-    def dump(self):
-        """Returns a string describing the source"""
-
-class git_source(source):
-    def __init__(self, host, path):
-        super(git_source, self).__init__(host, os.path.basename(path))
+    def __init__(self, host, path, fnl = None):
+        """Creates a source with the given host/path"""
+        self.host = host
+        self.name = os.path.basename(path)
         self.path = path
-        self.final_name = self.name
+        if fnl:
+            self.final_name = fnl
+        else:
+            self.final_name = self.name
         if not self.final_name.endswith(".git"):
             self.final_name += ".git"
 
-
-    def loc(self):
-        if self.host.is_local():
-            return self.path
-        else:
-            return "%s:%s" % (self.host, self.path)
-
-    def sync_to(self, store):
-        """Does the actual synchronization. Returns false if the synchronisation failed somehow"""
+    def sync_to(self, store, secondary = None):
+        """Does the actual synchronization.
+        If secondary is not None, then that repository
+        (assumed to be local)
+        Returns false if the synchronisation failed somehow"""
         target = "%s/%s" % (store.git_dir(), self.final_name)
         if not os.path.exists(target):
             os.makedirs(target)
 
         owd = os.getcwd()
         os.chdir(store.git_dir())
+        loc = self.get_loc()
+        if secondary is not None:
+            loc = secondary
+        
         # check if the objects directory is present or not ?
         rv = True
         try:
@@ -242,13 +282,13 @@ class git_source(source):
                        '-c', 'pack.threads=1',
                        '-c', 'pack.packSizeLimit=2G',
                        '-c', 'core.bigfilethreshold=50m',
-                       '--bare', self.loc(), self.final_name)
+                       '--bare', loc, self.final_name)
                 prudence.system(cmd)
             else:
                 os.chdir(self.final_name)
                 cmd = ('git', 'fetch',
                        '--verbose',
-                       self.loc(),
+                       loc,
                        '+refs/heads/*:refs/heads/*')
                 prudence.system(cmd)
         except subprocess.CalledProcessError:
@@ -256,32 +296,79 @@ class git_source(source):
         os.chdir(owd)
         return rv
 
-    def dump(self):
-        local = "local" if self.host.is_local() else "remote"
-        return "git: %s (%s)" % (self.loc(), local)
+    def loc(self):
+        """Returns the location -- the target git repository"""
+        return "%s:%s" % (self.host, self.path)
 
-    def status_in(self, store):
+
+    def get_status_in(self, store):
+        """Returns a hash containing the branches -> {'hash', 'date'}"""
         owd = os.getcwd()
-        os.chdir(store.git_dir())
-        print("Status in %s" % store.git_dir())
-        sys.stdout.flush()
-        prudence.system( ("du", "-s", "-h", self.final_name) )
-        os.chdir(self.final_name)
         try:
-            branches = re.split('\s+', subprocess.check_output(('git', 'branch')).decode('utf-8'))
+            os.chdir(store.git_dir())
+        except:
+            return {'error': 'inexistent-storage'}
+
+        rv = {}
+        try:
+            rv['size'] = store.directory_use(self.final_name)
+            os.chdir(self.final_name)
+            branches = re.split('\s+',
+                                subprocess.check_output(('git', 'branch'),
+                                                        text=True))
+            rv['branches'] = {}
             for b in branches:
                 if not (b == "" or b == "*"):
-                    cmd = ('git',
-                           'show',
-                           '--pretty=format:\t%s:\t%%h %%ci\n' % b,
-                           '-s',
-                           b)
-                    prudence.system( cmd )
+                    rv['branches'][b] = {}
+                    brch = rv['branches'][b]
+                    vl = subprocess.check_output(('git',
+                                                  'show',
+                                                  '--pretty=format:%h\n%ci',
+                                                  '-s',
+                                                  b),
+                                                 text=True
+                                                 )
+                    v = vl.split("\n")
+                    brch['hash'] = v[0]
+                    brch['date'] = v[1]
         except subprocess.CalledProcessError:
-            print(" -> failed to check status")
+            rv['error'] = 'git-failed'
+        except FileNotFoundError:
+            # Likely when the chdir fails
+            rv['error'] = 'repository-missing'
         os.chdir(owd)
+        return rv
+
+    def dump(self):
+        return "git: %s" % self.loc()
 
 
 p = prudence()
 
-p.run()
+parser = argparse.ArgumentParser()
+parser.add_argument("-D", "--dump-config",action="store_true",
+                    help="dumps the configuration")
+parser.add_argument("-s", "--status",action="store_true",
+                    help="shows the status of the saves")
+parser.add_argument("-N", "--dry-run",action="store_true",
+                    help="only shows the command-lines instead of running them")
+parser.add_argument("-c", "--conffile", type=str,
+                    help="alternate location of the configuration file")
+args = parser.parse_args()
+
+
+if args.conffile:
+    p.conffile = args.conffile
+if args.dry_run:
+    p.dry_run = True
+
+p.parse_config()
+
+if args.dump_config:
+    p.dump_config()
+    exit(0)
+
+if args.status:
+    p.print_status()
+    exit(0)
+
