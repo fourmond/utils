@@ -44,6 +44,9 @@ class prudence:
       hard drives, identified via their UUID ? (to be mounted
       manually). The status of the saves on the removable hard drives
       should be saved somehow
+
+    @todo: find a way to blacklist a source or even a source host for a
+    given storage
     """
 
     instance = None
@@ -76,18 +79,22 @@ class prudence:
         """Runs the actual backup job"""
         if self.conf_parse:
             raise "Cannot use while reading the configuration file"
-        # failed = []
-        # for s in self.sources:
-        #     print("\nBacking up: %s" % s.loc())
-        #     for st in self.stores:
-        #         # Only save to local stores ?
-        #         if st.is_local():
-        #             print(" -> to %s " % st.dirname)
-        #             if not s.sync_to(st):
-        #                 print(" -> FAILED")
-        #                 failed.append("%s -> %s" % (s.loc(), st.dirname))
-        # if(len(failed) > 0):
-        #     print("Failed syncs: %s" % (", ".join(failed)))
+        failed = []
+        for s in self.sources:
+            print("\nBacking up: %s" % s.loc())
+            successful_save = None
+            for st in self.stores:
+                # We use the first successful save as seed for the others
+                print(" -> to %s " % st.dirname)
+                if s.sync_to(st, successful_save):
+                    if successful_save is None:
+                        successful_save = "%s/%s" % (st.git_dir(), s.final_name)
+                    print(" -> SUCCEEDED")
+                else:
+                    print(" -> FAILED")
+                    failed.append("%s -> %s" % (s.loc(), st.dirname))
+        if(len(failed) > 0):
+            print("Failed syncs: %s" % (", ".join(failed)))
 
     def print_status(self):
         """Prints the status of the saves"""
@@ -122,9 +129,8 @@ class prudence:
     def launch(self, command):
         """Launches a given command (an array of text)"""
         s = " ".join(command)
-        if self.verbose or self.dry_run:
-            print("Running %s" % s)
-            print(" -> current dir: %s" % (os.getcwd()))
+        print("Running %s" % s)
+        print(" -> current dir: %s" % (os.getcwd()))
         if not self.dry_run:
             subprocess.call(command)
 
@@ -177,9 +183,8 @@ class store:
         
 
     def dump(self):
-        stat = os.statvfs(self.dirname)
-        sz = (stat.f_frsize * stat.f_bavail)/(1024*1024)
-        local = " %d MB available" % sz
+        sz = int(self.available_space()/1024)
+        local = "%d MB available" % sz
         return "%s (%s -- %s)" % (self.dirname, local, self.mount_point())
 
     def mount_point(self):
@@ -268,7 +273,7 @@ class git_source:
 
         owd = os.getcwd()
         os.chdir(store.git_dir())
-        loc = self.get_loc()
+        loc = self.loc()
         if secondary is not None:
             loc = secondary
         
@@ -291,7 +296,8 @@ class git_source:
                        loc,
                        '+refs/heads/*:refs/heads/*')
                 prudence.system(cmd)
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
+            print(" -> failed ? : %s" % e)
             rv = False
         os.chdir(owd)
         return rv
@@ -313,6 +319,19 @@ class git_source:
         try:
             rv['size'] = store.directory_use(self.final_name)
             os.chdir(self.final_name)
+            # Find the size of the largest pack
+            mx = 0
+            pack_size = 0
+            for f in os.listdir("objects/pack"):
+                rf = "objects/pack/" + f
+                if os.path.isfile(rf):
+                    sz = os.path.getsize(rf)
+                    if sz > mx:
+                        mx = sz
+                    pack_size += sz
+            rv['largest-pack'] = int(mx/1024)
+            rv['pack-size'] = int(pack_size/1024)
+
             branches = re.split('\s+',
                                 subprocess.check_output(('git', 'branch'),
                                                         text=True))
@@ -372,3 +391,6 @@ if args.status:
     p.print_status()
     exit(0)
 
+
+# If nothing else happened, try to run the backup
+p.run_backup()
