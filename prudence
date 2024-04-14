@@ -100,6 +100,9 @@ class prudence:
             print("\nBacking up: %s" % s.loc())
             successful_save = None
             for st in self.stores:
+                if s.host in st.exclude_source:
+                    print(" -> skipping %s" % st.dirname)
+                    continue
                 # We use the first successful save as seed for the others
                 print(" -> to %s " % st.dirname)
                 if s.sync_to(st, successful_save):
@@ -222,9 +225,10 @@ class prudence:
     def system(command):
         prudence.instance.launch(command)
 
-    def store(self, spec, git_sub = "git"):
-        """Used from the config file to add one store"""
-        self.stores.append(store(spec, git_sub))
+    def store(self, spec, git_sub = "git", exclude_source = []):
+        """Used from the config file to add one store
+        The exclude_source parameter excludes one source host"""
+        self.stores.append(store(spec, git_sub, exclude_source))
 
     def git(self, spec, fnl = None):
         """Used in the config file to add a git source"""
@@ -246,10 +250,11 @@ class store:
 
     """
 
-    def __init__(self, dirname, git_dir):
+    def __init__(self, dirname, git_dir, exclude_source):
         """Designates a (local) storage place"""
         self.dirname = dirname
         self.git = git_dir
+        self.exclude_source = set(exclude_source)
 
     def available_space(self):
         """Returns the available space in the given storage, in kB"""
@@ -359,8 +364,9 @@ class git_source:
     def sync_to(self, store, secondary = None):
         """Does the actual synchronization.
         If secondary is not None, then that repository
-        (assumed to be local)
+        (assumed to be local) is used a a secondary source
         Returns false if the synchronisation failed somehow"""
+        
         target = "%s/%s" % (store.git_dir(), self.final_name)
         if not os.path.exists(target):
             os.makedirs(target)
