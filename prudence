@@ -54,7 +54,6 @@ class prudence:
     instance = None
     
     def __init__(self):
-        self.conffile = os.environ['HOME'] + "/.prudence"
         self.sources = []
         self.stores = []
         self.dry_run = False
@@ -64,6 +63,13 @@ class prudence:
             prudence.instance = self
 
         self.host = prudence.host_name()
+        conf = os.environ['HOME'] + "/.prudence"
+        conf_local = "%s-%s" % (conf, self.host)
+        # 
+        if os.path.isfile(conf_local):
+            self.conffile = conf_local
+        else:
+            self.conffile = os.environ['HOME'] + "/.prudence"
 
 
     def parse_config(self):
