@@ -19,6 +19,8 @@ import subprocess
 import re
 import json
 
+import time
+
 class prudence:
     """The point of prudence is to distribute (git) backups across
     as many hard drives as possible.
@@ -61,12 +63,14 @@ class prudence:
         if prudence.instance is None:
             prudence.instance = self
 
+        self.host = prudence.host_name()
+
 
     def parse_config(self):
         """Parses the configuration file, which is expected to contain
         python code using 'p' as the prudence instance.
 
-        Only a
+        Only a few commands should be run from within that script.
         """
         code = open(self.conffile).read()
         context = dict()
@@ -75,11 +79,17 @@ class prudence:
         exec(code,context)
         self.conf_parse = False
 
+    @staticmethod
+    def host_name():
+        """Returns the host name part of the current host"""
+        return socket.gethostname().split(".")[0]
+
     def run_backup(self):
         """Runs the actual backup job"""
         if self.conf_parse:
             raise "Cannot use while reading the configuration file"
         failed = []
+        print("Running the backup on %s" % self.host)
         for s in self.sources:
             print("\nBacking up: %s" % s.loc())
             successful_save = None
@@ -101,18 +111,86 @@ class prudence:
         print(store.mount_points())
         print(json.dumps(self.get_status(), sort_keys=True, indent=2))
 
+    def print_html_status(self, status = None):
+        """Prints to standard output an HTML summary of the status of the
+        saves.
+
+        The staus is by default the output of get_status, but the
+        status of more hosts could be aggregated too
+        """
+        if status is None:
+            status = self.get_status()
+        print("<html>")
+
+        # First a summary of the storage places
+        print("<h2>Storage places</h2>\n")
+        print("""<table>
+<tr><th>Store</th><th>Used</th><th>Free</th><th>Total</th></tr>""")
+        stores = sorted(status['stores'].keys())
+        for s in stores:
+            sk = status['stores'][s]
+            print("<tr><td>%s</td><td>%.1f</td><td>%.1f</td><td>%.1f</td></tr>" %
+                  (s, sk['used_space']/(1024*1024),
+                   sk['free_space']/(1024*1024),
+                   sk['total_space']/(1024*1024)))
+
+        print("</table>")
+
+        # Then all the sources
+        print("<h2>Backups</h2>\n")
+        print("<table>\n<tr><th>Source</th><th>%s</th><th>Last</th></tr>" % (
+            "</th><th>".join(stores)))
+        sources = sorted(status['sources'])
+        for src in sources:
+            sc = status['sources'][src]
+            print("<tr><td>%s</td>" % src)
+            lst = None
+            for st in stores:
+                if st in sc:
+                    branches = sc[st]['branches'].keys()
+                    last_date = None
+                    mr_branch = None
+                    mr_commit = None
+                    for b in branches:
+                        # "date": "2009-12-28 21:45:55 +0100"
+                        dt = sc[st]['branches'][b]['date']
+                        date = time.strptime(dt, "%Y-%m-%d %H:%M:%S %z")
+                        if last_date is None or date > last_date:
+                            last_date = date
+                            if lst is None or lst < date:
+                                lst = date
+                            mr_branch = b
+                            mr_commit = sc[st]['branches'][b]['hash']
+                    if last_date is None:
+                        print("<td color='red'>Something wrong</td>")
+                    else:
+                        print("<td>%s@%s %s (%.1f MB)</td>" % (
+                            mr_commit,
+                            mr_branch,
+                            time.strftime("%Y-%m-%d", last_date),
+                            sc[st]['size']/1024
+                        ))
+                else:
+                    print("<td color='red'>Not Found</td>")
+            print("<td>%s</td>" % time.strftime("%Y-%m-%d", lst))
+            print("</tr>")
+        
+        print("</table>")
+
     def get_status(self):
         """Gets the whole status of the saves"""
         rv = {}
         rv['stores'] = {}
-        for s in self.stores:
-            rv['stores'][s.dirname] = s.get_status()
+        for st in self.stores:
+            stl = "%s:%s" % (self.host, st.dirname)
+            rv['stores'][stl] = st.get_status()
         rv['sources'] = {}
         for s in self.sources:
             loc = s.loc()
             rv['sources'][loc] = {}
             for st in self.stores:
-                rv['sources'][loc][st.dirname] = s.get_status_in(st)
+                stl = "%s:%s" % (self.host, st.dirname)
+                rv['sources'][loc][stl] = s.get_status_in(st)
         return rv
         
 
@@ -176,6 +254,15 @@ class store:
         except:
             return -1
 
+    def total_space(self):
+        """Returns the total spacein the given storage, in kB"""
+        try:
+            stat = os.statvfs(self.mount_point())
+            sz = (stat.f_frsize * stat.f_blocks)/1024
+            return int(sz)
+        except:
+            return -1
+
 
     def git_dir(self):
         """Returns the directory where one can store git repositories"""
@@ -200,6 +287,7 @@ class store:
         rv['directory'] = self.dirname
         rv['used_space'] = store.directory_use(self.dirname)
         rv['free_space'] = self.available_space()
+        rv['total_space'] = self.total_space()
         rv['mount'] = self.mount_point()
         rv['device'] = self.device()
         return rv
@@ -369,6 +457,8 @@ parser.add_argument("-D", "--dump-config",action="store_true",
                     help="dumps the configuration")
 parser.add_argument("-s", "--status",action="store_true",
                     help="shows the status of the saves")
+parser.add_argument("--html-status",action="store_true",
+                    help="prints an HTML status of the backups")
 parser.add_argument("-N", "--dry-run",action="store_true",
                     help="only shows the command-lines instead of running them")
 parser.add_argument("-c", "--conffile", type=str,
@@ -389,6 +479,10 @@ if args.dump_config:
 
 if args.status:
     p.print_status()
+    exit(0)
+
+if args.html_status:
+    p.print_html_status()
     exit(0)
 
 
