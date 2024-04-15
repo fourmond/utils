@@ -1,6 +1,6 @@
-#! /usr/bin/python
+#! /usr/bin/python3
 
-# Copyright 2017 by Vincent Fourmond
+# Copyright 2017,2024 by Vincent Fourmond
 # This program is free software. It is distributed under the terms of the
 # GNU General Public License version 3.0 or later, found at
 # https://www.gnu.org/copyleft/gpl.html
@@ -96,7 +96,7 @@ cheap version of git gc"""
         with os.popen('git pack-redundant --all') as gpr:
             for line in gpr:
                 pck = line.rstrip()
-                print "Removing redundant pack: %s" % pck
+                print("Removing redundant pack: %s" % pck)
                 os.unlink(pck)
 
     def simple_repack(self, size_threshold, tolerance = 1.5,
@@ -110,7 +110,7 @@ exceed tolerance times the threshold."""
         ts = 0
         rt = size_threshold * tolerance * 0.5
         for pack in rep.list_packs():
-            print pack
+            print(pack)
             if pack.size < rt:
                 pack.read_pack()
                 packs.append(pack)
@@ -119,9 +119,9 @@ exceed tolerance times the threshold."""
                     packfile.repack(packs, dry_run)
                     packs = []
                     ts = 0
-                    print pack
+                    print(pack)
             else:
-                print "Pack %s too big, not touching it" % pack
+                print("Pack %s too big, not touching it" % pack)
         if len(packs) > 1:
             packfile.repack(packs, dry_run)
         self.drop_redundant_packs()
@@ -146,7 +146,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         self.all_objects = {}
         dups = []
         for pck in self.packs:
-            for obj in pck.objects.values():
+            for obj in list(pck.objects.values()):
                 if not obj.sha1 in self.all_objects:
                     self.all_objects[obj.sha1] = []
                 else:
@@ -158,27 +158,27 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         st = {}
         ics = []
         for pck in self.list_packs():
-            print "Reading pack %s" % pck.pack_file
+            print("Reading pack %s" % pck.pack_file)
             pck.read_pack()
             pck.read_object_sizes()
             sts = pck.stats()
-            print " -> %s " % sts
-            for n in sts.keys():
+            print(" -> %s " % sts)
+            for n in list(sts.keys()):
                 st[n] = st.get(n, 0) + sts[n]
             if full:
-                for ic in pck.interconnected_objects.values():
-                    print "   - %s " % ic.stats()
+                for ic in list(pck.interconnected_objects.values()):
+                    print("   - %s " % ic.stats())
                     ics.append(ic)
                     
         dups = self.cross_reference_objects()
-        print "%d duplicate objects" % len(dups)
-        print st
+        print("%d duplicate objects" % len(dups))
+        print(st)
 
         if full:
-            print "Hierarchies by size"
+            print("Hierarchies by size")
             ics = sorted(ics, key=lambda a: a.stats()['packed_size'])
             for ic in ics:
-                print "   - %s " % ic.stats()
+                print("   - %s " % ic.stats())
 
         # Now make stats about the hierarchies ?
 
@@ -200,7 +200,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
         # things
         co = self.count_objects()
         if co['size'] > repack_size:
-            print "Packing loose objects"
+            print("Packing loose objects")
             self.cheap_gc()
 
         d = os.statvfs(self.obj_dir)
@@ -216,7 +216,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 oversized += 1
 
         if oversized == 0 and undersized <= 2:
-            print "Nothing to do"
+            print("Nothing to do")
             return
         
 
@@ -245,21 +245,21 @@ with the packs they are found in. Assumes the packs are already read. Returns th
 
         # Hmmm, this is where one needs to be smart ?
         for pk in self.list_packs():
-            print "Reading %d MB pack %s " % (pk.size / (1024**2), pk.pack_file)
+            print("Reading %d MB pack %s " % (pk.size / (1024**2), pk.pack_file))
             if pk.dissect_path()[1] == "gbp-final-pack":
-                print "Ignoring %s, already marked as done before" % pk.pack_file
+                print("Ignoring %s, already marked as done before" % pk.pack_file)
                 continue
             if (pk.size > pack_size * tolerance) and (repack_size + pk.size)*tolerance > available:
-                print "Skipping %s because there is not enough disk space available to repack it"
+                print("Skipping %s because there is not enough disk space available to repack it")
                 continue
             
             pk.read_pack()
-            print " -> %s" % pk.describe()
+            print(" -> %s" % pk.describe())
             read_size += pk.size
-            print " -> %.2f GB read so far" % (read_size/((1024.0**3)))
-            ics = sorted(pk.interconnected_objects.values(), key=lambda a: a.stats()['packed_size'])
+            print(" -> %.2f GB read so far" % (read_size/((1024.0**3))))
+            ics = sorted(list(pk.interconnected_objects.values()), key=lambda a: a.stats()['packed_size'])
             if len(ics) == 0:
-                print " -> Empty pack ?"
+                print(" -> Empty pack ?")
                 continue
             
             # Large packs, but made of only one object -> forget
@@ -271,7 +271,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 done_pks.append(pk)
                 continue
             if (repack_size + pk.size)*tolerance > available:
-                print "Skipping %s because there is not enough disk space available to repack it"
+                print("Skipping %s because there is not enough disk space available to repack it")
                 continue
             repack_size += pk.size
                 
@@ -296,37 +296,37 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 big_ics.extend(ics)
 
         for d in done_pks:
-            print "Not repacking %s, OK" % d.pack_file
+            print("Not repacking %s, OK" % d.pack_file)
             d.rename("gbp-final-pack")
 
         if (len(small_pks) < 2) and (len(big_pks) < 2) and (len(redo_pks) - len(small_pks) - len(big_pks) == 0) :
-            print "Only lone packs left to repack, not repacking"
+            print("Only lone packs left to repack, not repacking")
             return 
 
 
-        print "Need to repack: "
+        print("Need to repack: ")
         for d in redo_pks:
-            print " - %s" % d.pack_file
+            print(" - %s" % d.pack_file)
 
         # Sort small things into packs
         small_pks = interconnected_objects.split_into_packs(small_ics, pack_size, tolerance)
         big_pks = interconnected_objects.split_into_packs(big_ics, pack_size, tolerance)
         if dry_run:
-            print "Small packs:"
+            print("Small packs:")
             i = 0
             for pk in small_pks:
-                print "Pack #%d" % i
+                print("Pack #%d" % i)
                 i += 1
                 for ic in pk:
-                    print "   - %s " % ic.stats()
+                    print("   - %s " % ic.stats())
                     
-            print "Large packs:"
+            print("Large packs:")
             i = 0
             for pk in big_pks:
-                print "Pack #%d" % i
+                print("Pack #%d" % i)
                 i += 1
                 for ic in pk:
-                    print "   - %s " % ic.stats()
+                    print("   - %s " % ic.stats())
 
         else:
             # First rename all packs to remove
@@ -334,14 +334,14 @@ with the packs they are found in. Assumes the packs are already read. Returns th
                 pk.rename("backup")
             
             for pk in small_pks:
-                print "\nPacking %d hierarchies" % len(pk)
+                print("\nPacking %d hierarchies" % len(pk))
                 packfile.pack_objects(self, pk, "small")
             for pk in big_pks:
-                print "\nPacking %d hierarchies" % len(pk)
+                print("\nPacking %d hierarchies" % len(pk))
                 packfile.pack_objects(self, pk, "big")
 
         for d in redo_pks:
-            print "Removing pack: %s" % d.pack_file
+            print("Removing pack: %s" % d.pack_file)
             packfile.remove_pack(d)
 
                 
@@ -421,7 +421,7 @@ terms of storage, i.e. objects that are deltas of a single root object"""
             'total_size': 0,
             'packed_size':0
         }
-        for obj in self.objects.keys():
+        for obj in list(self.objects.keys()):
             st['object_size'] += obj.size
             if obj.file_size is not None:
                 st['total_size'] += obj.file_size
@@ -430,7 +430,7 @@ terms of storage, i.e. objects that are deltas of a single root object"""
 
     def sha1s(self):
         """Returns a list of all the SHA1 in the hierarchy"""
-        return map(lambda o: o.sha1, self.objects.keys())
+        return [o.sha1 for o in list(self.objects.keys())]
             
     @staticmethod
     def split_into_packs(ics, pack_size, tolerance):
@@ -455,7 +455,7 @@ terms of storage, i.e. objects that are deltas of a single root object"""
                     # todo: remove from the list ?
             if not fnd:
                 pks.append([sz, [ic]])
-        return map(lambda a: a[1], pks)
+        return [a[1] for a in pks]
             
             
 
@@ -492,11 +492,11 @@ class packfile:
             os.unlink(f)
 
     def dump_objects(self):
-        for o in self.objects.values():
-            print " - %s %s" % (o.sha1, o.kind)
-        print "Hierarchies"
-        for i in self.interconnected_objects.values():
-            print " - %s " % (" ".join(map(lambda o:o.sha1, i.objects.keys())))
+        for o in list(self.objects.values()):
+            print(" - %s %s" % (o.sha1, o.kind))
+        print("Hierarchies")
+        for i in list(self.interconnected_objects.values()):
+            print(" - %s " % (" ".join([o.sha1 for o in list(i.objects.keys())])))
 
     def rename(self, new_base):
         d, b, s = self.dissect_path()
@@ -515,7 +515,7 @@ class packfile:
                     obj = packed_object(lst, self)
                     self.objects[obj.sha1] = obj
         # Now, we go over them again, cross-referencing them.
-        for obj in self.objects.values():
+        for obj in list(self.objects.values()):
             if obj.base_ref:
                 obj.base = self.objects[obj.base_ref]
             else:
@@ -523,7 +523,7 @@ class packfile:
 
         # A pass to categorize the objects, has to come second for the
         # obj.base x-ref to be useable
-        for obj in self.objects.values():
+        for obj in list(self.objects.values()):
             root = obj.root()
             if root not in self.interconnected_objects:
                 self.interconnected_objects[root] = interconnected_objects(obj)
@@ -537,8 +537,8 @@ class packfile:
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
                                 stdin=subprocess.PIPE)
-        objs = self.objects.values();
-        inp = "\n".join(map(lambda x: x.sha1, objs))
+        objs = list(self.objects.values());
+        inp = "\n".join([x.sha1 for x in objs])
         out, err = proc.communicate(inp)
         i = 0
         for ln in out.split("\n"):
@@ -556,7 +556,7 @@ class packfile:
             'interconnected_hierarchies': len(self.interconnected_objects),
             'packed_size':0
         }
-        for obj in self.objects.values():
+        for obj in list(self.objects.values()):
             st['objects'] += 1
             if obj.base is not None:
                 st['deltas'] += 1
@@ -575,13 +575,13 @@ class packfile:
     def repack(packs, dry_run=False):
         """Repacks the given packs"""
         if dry_run:
-            print "Would repack packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
+            print("Would repack packs: %s" % (", ".join([x.pack_file for x in packs])))
                 
         else:
-            print "Repacking packs: %s" % (", ".join(map(lambda x: x.pack_file, packs)))
+            print("Repacking packs: %s" % (", ".join([x.pack_file for x in packs])))
             with os.popen('git pack-objects .git/objects/pack/pack --threads=1', 'w') as gpa:
                 for pck in packs:
-                    for o in pck.objects.values():
+                    for o in list(pck.objects.values()):
                         gpa.write("%s\n" % o.sha1)
 
 
@@ -604,8 +604,8 @@ class packfile:
 
     def split(self, size, tolerance = 0.2):
         """Splits the pack into packs of approximately the given size"""
-        ics = self.interconnected_objects.values()
-        print len(ics)
+        ics = list(self.interconnected_objects.values())
+        print(len(ics))
         pcks = []               # List of arrays of ics
         for i in ics:
             fnd = False
@@ -628,8 +628,8 @@ class packfile:
                 for ic in p:
                     for o in ic.objects:
                         gpa.write("%s\n" % o.sha1)
-            print p
-            print " -> %d || %d " % (sz, size)
+            print(p)
+            print(" -> %d || %d " % (sz, size))
             
 
     @staticmethod
@@ -646,8 +646,8 @@ class packfile:
                         
 def mess_up(mu):
     """Creates a git repository in a subdirectory, and add files and modify them randomly"""
-    orig_files = map(lambda x: "../%s" % x, glob.glob('*'))
-    print orig_files
+    orig_files = ["../%s" % x for x in glob.glob('*')]
+    print(orig_files)
     if not os.path.isdir(".git/objects"):
         os.mkdir("tst-git")
     os.chdir("tst-git")
@@ -697,9 +697,9 @@ def mess_up(mu):
             continue
         repack = random.randint(0,2) < 1
         if repack or mu == 0:
-            print "\n\n\nRepack"
+            print("\n\n\nRepack")
             call('git', 'repack')
-            print "-> done\n"
+            print("-> done\n")
             
 
         
@@ -733,7 +733,7 @@ for action in args.action:
     if code is not None:
         code()
     else:
-        print "Unkown action: %s" % action
+        print("Unkown action: %s" % action)
 
 
 

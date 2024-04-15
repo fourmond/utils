@@ -156,6 +156,10 @@ class prudence:
             lst = None
             for st in stores:
                 if st in sc:
+                    if 'branches' not in sc[st]:
+                        print("<td style='color: red;'>%s</td>" %
+                              sc[st].get("error", "unkown error"))
+                        continue
                     branches = sc[st]['branches'].keys()
                     last_date = None
                     mr_branch = None
@@ -171,7 +175,7 @@ class prudence:
                             mr_branch = b
                             mr_commit = sc[st]['branches'][b]['hash']
                     if last_date is None:
-                        print("<td color='red'>Something wrong</td>")
+                        print("<td style='color: red;'>Something wrong</font></td>")
                     else:
                         print("<td>%s@%s %s (%.1f MB)</td>" % (
                             mr_commit,
@@ -180,8 +184,9 @@ class prudence:
                             sc[st]['size']/1024
                         ))
                 else:
-                    print("<td color='red'>Not Found</td>")
-            print("<td>%s</td>" % time.strftime("%Y-%m-%d", lst))
+                    print("<td style='color: red;'>Not Found</td>")
+            if lst is not None:
+                print("<td>%s</td>" % time.strftime("%Y-%m-%d", lst))
             print("</tr>")
         
         print("</table>")
@@ -471,6 +476,8 @@ parser.add_argument("-s", "--status",action="store_true",
                     help="shows the status of the saves")
 parser.add_argument("--html-status",action="store_true",
                     help="prints an HTML status of the backups")
+parser.add_argument("--json-status",action="store_true",
+                    help="prints the JSON status of the backups")
 parser.add_argument("-N", "--dry-run",action="store_true",
                     help="only shows the command-lines instead of running them")
 parser.add_argument("-c", "--conffile", type=str,
@@ -495,6 +502,10 @@ if args.status:
 
 if args.html_status:
     p.print_html_status()
+    exit(0)
+
+if args.json_status:
+    print(json.dumps(p.get_status()))
     exit(0)
 
 
