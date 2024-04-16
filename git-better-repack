@@ -22,41 +22,6 @@ import subprocess
 # For categorizing files.
 # import magic
 
-parser = argparse.ArgumentParser()
-parser.add_argument("action", default=['dump-objects'], nargs='*',
-                    help="action to be performed")
-parser.add_argument("-s", "--size", type=int,
-                    help="size (MB)")
-parser.add_argument("--big-objects", type=int,
-                    help="size (kb)")
-parser.add_argument("--mess-up", type=int,
-                    help="create a fake repository based on the files in the current directory with several operations")
-parser.add_argument("--dump-pack", type=str,
-                    help="dumps pack contents")
-parser.add_argument("-n", "--dry-run",action="store_true",
-                    help="dry run (don't repack)")
-parser.add_argument("-r", "--repack-size", type=int,
-                    help="size of loose objects necessary to run git-repack (MB)")
-args = parser.parse_args()
-
-# Provide default values
-if args.size:                   # in bytes !
-    args.size *= 1024**2
-else:
-    args.size = 10*1024**2
-
-if args.big_objects:                   # in bytes !
-    args.big_objects *= 1024
-else:
-    args.big_objects = 1*1024**2
-
-if args.repack_size:            
-    args.repack_size *= 1024 # in KB, compared to count_objects
-else:
-    args.repack_size = 50*1024
-
-
-
 class git_rep:
     """A whole git repository"""
 
@@ -192,7 +157,7 @@ with the packs they are found in. Assumes the packs are already read. Returns th
           * and, consequently, objects larger than small_obj_size are
             packed together
           * existing hierarchies are preserved
-          * packs adhering to the rules are left untouched
+          * packs already adhering to the rules are left untouched
           small_obj_size and pack_size are in bytes
         """
 
@@ -702,8 +667,52 @@ def mess_up(mu):
             print("-> done\n")
             
 
-        
-            
+
+parser = argparse.ArgumentParser()
+# parser.add_argument("action", default=['dump-objects'], nargs='*',
+#                     help="action to be performed")
+parser.add_argument("-s", "--size", type=int,
+                    help="target pack size (MB)")
+parser.add_argument("--big-objects", type=int,
+                    help="target size of the bigger objects (kB)")
+parser.add_argument("-n", "--dry-run",action="store_true",
+                    help="dry run (don't repack)")
+parser.add_argument("-r", "--repack-size", type=int,
+                    help="size of loose objects necessary to run git-repack (MB)")
+
+# Actions:
+parser.add_argument("--mess-up", type=int,
+                    help="create a fake repository based on the files in the current directory with several operations")
+parser.add_argument("--dump-pack", type=str,
+                    help="dumps pack contents")
+parser.add_argument("--repack", action="store_true",
+                    help="do a simple repack of the repository")
+parser.add_argument("--smart-repack", action="store_true",
+                    help="do a smart repack of the repository, separating small and big objects, aiming for a pack size not much larger than the size")
+parser.add_argument("--split", action="store",
+                    help="splits the given pack")
+parser.add_argument("--dump-objects", action="store_true",
+                    help="dumps the objects in the repository")
+parser.add_argument("--dump-full", action="store_true",
+                    help="dumps the objects in the repository, full version")
+
+args = parser.parse_args()
+
+# Provide default values
+if args.size:                   # in bytes !
+    args.size *= 1024**2
+else:
+    args.size = 10*1024**2
+
+if args.big_objects:                   # in bytes !
+    args.big_objects *= 1024
+else:
+    args.big_objects = 1*1024**2
+
+if args.repack_size:            
+    args.repack_size *= 1024 # in KB, compared to count_objects
+else:
+    args.repack_size = 50*1024
 
 if args.mess_up:
     mess_up(args.mess_up)
@@ -717,48 +726,21 @@ if args.dump_pack:
     pk.read_pack()
     pk.dump_objects()
     
-    exit()
+    exit(0)
 
-actions = {
-    'repack': lambda: rep.simple_repack(args.size, dry_run = args.dry_run),
-    'smart-repack': lambda: rep.smart_repack(args.big_objects, args.size, 1.2, args.dry_run, args.repack_size),
-    'split': lambda: packfile.split_pack(args.action[1], args.size, rep),
-    'dump-objects': rep.dump_objects,
-    'dump-full': lambda: rep.dump_objects(True)
-}
+if args.repack:
+    rep.simple_repack(args.size, dry_run = args.dry_run)
+    exit(0)
 
+if args.smart_repack:
+    rep.smart_repack(args.big_objects, args.size, 1.2, args.dry_run, args.repack_size)
+    exit(0)
 
-for action in args.action:
-    code = actions.get(action, None)
-    if code is not None:
-        code()
-    else:
-        print("Unkown action: %s" % action)
+if args.split:
+    packfile.split_pack(args.split, args.size, rep)
+    exit(0)
 
+if args.dump or args.dump_full:
+    rep.dump_objects(args.dump_full)
+    exit(0)
 
-
-#     # Now, walk over all the pack files, gathers the one that are smaller
-# # than a predefined pack size until their whole size is about the threshold
-
-# co = rep.count_objects()
-# if co["size"] > args.repack_size:
-#     rep.repack()
-
-# rep.drop_redundant_packs()
-    
-# packs = []
-# ts = 0
-# for pack in rep.list_packs():
-#     if pack.size < args.size*0.8:
-#         pack.read_pack()
-#         packs.append(pack)
-#         ts += pack.size
-#         if ts > 0.8*args.size:
-#             packfile.repack(packs, args.dry_run)
-#             packs = []
-#             ts = 0
-#         print pack
-#     else:
-#         print "Pack %s too big, not touching it" % pack
-
-# rep.drop_redundant_packs()
