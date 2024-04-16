@@ -206,6 +206,31 @@ class prudence:
                 stl = "%s:%s" % (self.host, st.dirname)
                 rv['sources'][loc][stl] = s.get_status_in(st)
         return rv
+
+    def merge_status(self, status, st2):
+        """Merge two status. The status corresponding to st2 is added to
+        status
+        """
+        for k in st2['stores'].keys():
+            status["stores"][k] = st2['stores'][k]
+
+        for s in st2['sources'].keys():
+            if s not in status['sources']:
+                status['sources'][s] = st2['sources'][s]
+            else:
+                for st in st2['sources'][s].keys():
+                    status['sources'][s][st] = st2['sources'][s][st]
+
+        return status
+            
+    @staticmethod
+    def get_host_status(target):
+        """Gets the status of the target host"""
+        jsn = subprocess.check_output(('ssh', target,
+                                       'Prog/utils/prudence',
+                                       '--json-status'),
+                                      text=True)
+        return json.loads(jsn)
         
 
     def dump_config(self):
@@ -474,6 +499,8 @@ parser.add_argument("-D", "--dump-config",action="store_true",
                     help="dumps the configuration")
 parser.add_argument("-s", "--status",action="store_true",
                     help="shows the status of the saves")
+parser.add_argument("-A", "--also",action="append",
+                    help="shows the status of the saves")
 parser.add_argument("--html-status",action="store_true",
                     help="prints an HTML status of the backups")
 parser.add_argument("--json-status",action="store_true",
@@ -501,7 +528,14 @@ if args.status:
     exit(0)
 
 if args.html_status:
-    p.print_html_status()
+    st = p.get_status()
+    if args.also is not None:
+        for h in args.also:
+            print("Querying host %s for status" % h,file=sys.stderr)
+            st2 = prudence.get_host_status(h)
+            p.merge_status(st, st2)
+    
+    p.print_html_status(st)
     exit(0)
 
 if args.json_status:
