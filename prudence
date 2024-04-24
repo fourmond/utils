@@ -21,6 +21,9 @@ import json
 
 import time
 
+sys.stdout.reconfigure(write_through=True)
+sys.stderr.reconfigure(write_through=True)
+
 class prudence:
     """The point of prudence is to distribute (git) backups across
     as many hard drives as possible.
@@ -103,6 +106,9 @@ class prudence:
                 if s.host in st.exclude_source:
                     print(" -> skipping %s" % st.dirname)
                     continue
+                if not os.path.exists(st.dirname):
+                    print("The directory '%s' does not exist, skipping" % st.dirname)
+                    continue
                 # We use the first successful save as seed for the others
                 print(" -> to %s " % st.dirname)
                 if s.sync_to(st, successful_save):
@@ -112,6 +118,8 @@ class prudence:
                 else:
                     print(" -> FAILED")
                     failed.append("%s -> %s" % (s.loc(), st.dirname))
+            # We sleep a minute or so to avoid throttling on some remotes
+            time.sleep(60)
         if(len(failed) > 0):
             print("Failed syncs: %s" % (", ".join(failed)))
 

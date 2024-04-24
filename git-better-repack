@@ -501,7 +501,8 @@ class packfile:
                                  '--batch-check=%(objectsize)'],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
-                                stdin=subprocess.PIPE)
+                                stdin=subprocess.PIPE,
+                                text=True)
         objs = list(self.objects.values());
         inp = "\n".join([x.sha1 for x in objs])
         out, err = proc.communicate(inp)
@@ -740,7 +741,7 @@ if args.split:
     packfile.split_pack(args.split, args.size, rep)
     exit(0)
 
-if args.dump or args.dump_full:
+if args.dump_objects or args.dump_full:
     rep.dump_objects(args.dump_full)
     exit(0)
 
