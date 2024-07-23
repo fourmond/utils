@@ -189,7 +189,16 @@ td.mod {
         print("<h2>Backups</h2>\n")
         print("<table>\n<tr><th>Source</th><th>%s</th><th>Last</th><th>Size</th></tr>" % (
             "</th><th>".join(stores)))
-        sources = sorted(status['sources'])
+        sizes = {}
+        for s in status['sources'].keys():
+            sr = status['sources'][s]
+            sizes[s] = 0
+            for st in sr.values():
+                if ('size' in st) and (st['size'] > sizes[s]):
+                    sizes[s] = st['size']
+                    
+            # sizes[s] = sr['size']
+        sources = sorted(status['sources'], key= lambda x:-sizes[x])
         for src in sources:
             sc = status['sources'][src]
             print("<tr><td>%s</td>" % src)
@@ -237,12 +246,13 @@ td.mod {
                         elif delta_t > 7:
                             cls="mod"
                         
-                        print("<td class='%s'>%s -- %s (%s@%s)</td>" % (
+                        print("<td class='%s'>%s -- %s (%s@%s) Pack: %s</td>" % (
                             cls,
                             time.strftime("%Y-%m-%d", sc[st]['latest_date']),
                             prudence.format_size(sc[st]['size']),
                             sc[st]['latest_commit'],
-                            sc[st]['latest_branch']
+                            sc[st]['latest_branch'],
+                            prudence.format_size(sc[st]['largest-pack'])
                         ))
                         if sz is None or sz < sc[st]['size']:
                             sz = sc[st]['size']
